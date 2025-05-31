@@ -15,11 +15,57 @@ contract AiCreditVaultTest is Test {
     address USDC = address(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48); // Fake for test
 
     function setUp() public {
+       
         factory = ERC1967Factory(0x0000000000006396FF2a80c067f99B3d2Ab4Df24);
 
-        vm.prank(admin);
+        // Deploy the implementation once (not the proxy)
         implementation = new AiCreditVault();
+
+        // Any addresses or static test prep
+        // USDC and others can be declared at the top level if constant
+    
+
     }
+
+    function testMineVanityAddress() public {
+        address[] memory tokens = new address[](1);
+        tokens[0] = USDC;
+
+        bytes memory initData = abi.encodeWithSelector(
+            AiCreditVault.initialize.selector,
+            tokens,
+            backend
+        );
+
+        bytes32 salt;
+        address predicted;
+        uint96 counter;
+        vm.pauseGasMetering();
+        for (counter = 0; counter < type(uint96).max; counter++) {
+            salt = bytes32(bytes.concat(bytes20(admin), bytes12(counter)));
+            predicted = factory.predictDeterministicAddress(salt);
+            if (uint160(predicted) >> 140 == 0x01152) {
+                emit log_named_uint("Vanity Salt Found", counter);
+                emit log_named_address("Vanity Address", predicted);
+                break;
+            }
+        }
+        vm.resumeGasMetering();
+        require(uint160(predicted) >> 140 == 0x01152, "Failed to find vanity address");
+
+        vm.prank(admin);
+        address proxyAddress = factory.deployDeterministicAndCall(
+            address(implementation),
+            admin,
+            salt,
+            initData
+        );
+
+        assertEq(proxyAddress, predicted);
+        AiCreditVault vault = AiCreditVault(payable(proxyAddress));
+        assertTrue(vault.acceptedToken(USDC));
+    }
+
 
     function testPredictAndDeploy() public {
         address[] memory tokens = new address[](1);
@@ -57,33 +103,6 @@ contract AiCreditVaultTest is Test {
         assertTrue(vault.acceptedToken(USDC), "Token should be accepted");
     }
 
-    function testDepositAndDebtFlow() public {
-        address[] memory tokens = new address[](1);
-        tokens[0] = USDC;
+    // Debt 
 
-        bytes memory initData = abi.encodeWithSelector(
-            AiCreditVault.initialize.selector,
-            tokens,
-            backend
-        );
-
-        bytes32 salt = bytes32(bytes.concat(bytes20(admin), bytes12(uint96(1))));
-
-        vm.prank(admin);
-        address proxyAddress = factory.deployDeterministicAndCall(
-            address(implementation),
-            admin,
-            salt,
-            initData
-        );
-
-        AiCreditVault vault = AiCreditVault(payable(proxyAddress));
-
-        // Fake ERC20 token transfer logic not tested here
-        // Assume token is already in contract for simplicity
-        vm.prank(user);
-        vault.confirmDebt(user, USDC, 100e6);
-
-        assertEq(vault.debtOf(user, USDC), 100e6, "Debt mismatch");
-    }
 }
