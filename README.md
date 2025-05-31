@@ -1,66 +1,98 @@
-## Foundry
+###🧠 AiCreditVault
+##Solady-based UUPS-upgradeable smart contract system for managing collateralized AI usage credits on-chain.
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+#🔍 Overview
+This contract system allows users to:
 
-Foundry consists of:
+Deposit ETH or approved ERC20 tokens as collateral
 
--   **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
--   **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
--   **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
--   **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+Accumulate off-chain debt for AI generation services
 
-## Documentation
+Withdraw remaining collateral only after debt is reconciled
 
-https://book.getfoundry.sh/
+Use UUPS upgradeability and ERC1967 proxy deployments
 
-## Usage
+Optionally farm vanity proxy addresses with CREATE2
 
-### Build
+The system is composed of:
 
-```shell
-$ forge build
-```
+Contract	Purpose
+AiCreditVault	Core vault logic (collateral, debt, backend authorization)
+ERC1967Factory	Pre-deployed proxy factory from Solady (0x0000...df24)
+UUPSUpgradeable.sol	Upgrade pattern used for secure logic changes
+Ownable.sol	Access control for admin/owner roles
 
-### Test
+🚀 Deployment Flow
+Deploy AiCreditVault (implementation contract)
 
-```shell
-$ forge test
-```
+Use Solady's pre-deployed ERC1967Factory:
 
-### Format
+Copy
+Edit
+0x0000000000006396FF2a80c067f99B3d2Ab4Df24
+Compute vanity salt (e.g., for address 0x1152...) using initCodeHash() and Forge
 
-```shell
-$ forge fmt
-```
+Call:
 
-### Gas Snapshots
+solidity
+Copy
+Edit
+factory.deployDeterministicAndCall(
+  implementation,
+  admin,
+  salt,
+  abi.encodeWithSelector(AiCreditVault.initialize.selector, tokens, backend)
+);
+🔬 Features
+✅ ETH & ERC20 deposits (only whitelisted tokens)
 
-```shell
-$ forge snapshot
-```
+✅ Off-chain confirmDebt() for usage-based accounting
 
-### Anvil
+✅ Withdrawals locked by unresolved debt
 
-```shell
-$ anvil
-```
+✅ onlyBackend role gating
 
-### Deploy
+✅ Solady UUPSUpgradeable logic for lean, gas-efficient upgrades
 
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
+✅ Admin-controlled upgrade and backend management
 
-### Cast
+🧪 Test Suite (Forge)
+Deploy logic contract
 
-```shell
-$ cast <subcommand>
-```
+Farm deterministic proxy address
 
-### Help
+Deploy proxy with init data
 
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
+Confirm debt & test withdrawal logic
+
+Run Tests
+bash
+Copy
+Edit
+forge test -vvvv
+Run Vanity Salt Finder
+bash
+Copy
+Edit
+forge script script/FarmVanitySalt.s.sol:FarmVanitySalt --sig "run()"
+🛠 Development Commands
+bash
+Copy
+Edit
+forge build         # compile contracts
+forge test          # run tests
+forge script        # run deployment or vanity farming scripts
+📚 Resources
+Solady: https://github.com/vectorized/solady
+
+ERC-1967 Proxy Standard: https://eips.ethereum.org/EIPS/eip-1967
+
+UUPS Pattern: https://docs.openzeppelin.com/upgrades-plugins/1.x/proxies#uups
+
+🧑‍💼 Admin Tips
+Use ERC1967Factory.adminOf(proxy) to confirm ownership
+
+Only the admin passed at proxy creation can upgrade via the factory
+
+Use upgrade() or upgradeAndCall() via the factory to change logic safely
+
