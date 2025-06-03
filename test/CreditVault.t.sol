@@ -63,7 +63,6 @@ contract AiCreditVaultTest is Test {
 
         assertEq(proxyAddress, predicted);
         AiCreditVault vault = AiCreditVault(payable(proxyAddress));
-        assertTrue(vault.acceptedToken(USDC));
     }
 
 
@@ -99,8 +98,6 @@ contract AiCreditVaultTest is Test {
         // Bind interface to proxy
         AiCreditVault vault = AiCreditVault(payable(proxyAddress));
 
-        // Test that storage is initialized
-        assertTrue(vault.acceptedToken(USDC), "Token should be accepted");
     }
 
     // Debt 

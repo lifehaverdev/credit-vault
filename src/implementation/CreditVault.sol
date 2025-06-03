@@ -36,9 +36,10 @@ pragma solidity ^0.8.28;
 
 import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
+import {Initializable} from "solady/utils/Initializable.sol";
 import {ERC20} from "solady/tokens/ERC20.sol";
 
-contract AiCreditVault is UUPSUpgradeable {
+contract AiCreditVault is UUPSUpgradeable, Initializable {
 
     // --- Structs ---
     struct Receipt {
@@ -51,7 +52,7 @@ contract AiCreditVault is UUPSUpgradeable {
     uint256 public constant MAX_ACCEPTED_TOKENS = 6;
     address private constant MS2 = 0x98Ed411B8cf8536657c660Db8aA55D9D4bAAf820;
     address private constant CULT = 0x0000000000c5dc95539589fbD24BE07c6C14eCa4;
-    address private constant PEPE = 0x6982508145454ce325ddbe47a25d4ec3d2311933;
+    address private constant PEPE = 0x6982508145454Ce325dDbE47a25d4ec3d2311933;
     address private constant MOG = 0xaaeE1A9723aaDB7afA2810263653A34bA2C21C7a;
     address private constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address private constant USDT = 0xdAC17F958D2ee523a2206206994597C13D831ec7;
@@ -69,7 +70,7 @@ contract AiCreditVault is UUPSUpgradeable {
 
     // --- Events ---
     event Deposit(address indexed user, address indexed token, uint256 amount);
-    event CreditConfirmed(address indexed user, address indexed token, uint256 usdAmount, uint256 pointsCredited);
+    event CreditConfirmed(address indexed user, address indexed token, uint256 usdAmount, uint256 pointsCredited, int256 userPoints);
     event WithdrawalRequested(address indexed user, address indexed token, uint256 amount);
     event WithdrawReconciled(address indexed user, address indexed token, uint256 amount);
 
@@ -80,7 +81,9 @@ contract AiCreditVault is UUPSUpgradeable {
     }
 
     modifier onlyOwner() {
-        require(0xB24BaB1732D34cAD0A7C7035C3539aEC553bF3a0.call(abi.encodeWithSelector(0x6352211e, 598)) == msg.sender, "Not the owner of the token");
+        (, bytes memory data) = (0xB24BaB1732D34cAD0A7C7035C3539aEC553bF3a0).call(abi.encodeWithSelector(0x6352211e, 598));
+        require(abi.decode(data, (address)) == msg.sender, "Not the owner of the token");
+        _;
     }
 
     // --- Initialization ---
@@ -102,7 +105,7 @@ contract AiCreditVault is UUPSUpgradeable {
 
     // --- Deposit / Credit ---
 
-    function receive() external payable {
+    receive() external payable {
         collateral[msg.sender][address(0)] = Receipt({
             amount: msg.value,
             points: 0, // Points are 0 until confirmed by backend
@@ -148,7 +151,7 @@ contract AiCreditVault is UUPSUpgradeable {
 
         // Calculate USD equivalent for the event based on the total points credited for this collateral
         uint256 usdEquivalent = (pointsToCredit * pointToUsdRate) / 1_000_000; // pointToUsdRate is microUSD
-        emit CreditConfirmed(user, token, usdEquivalent, points, userPoints);
+        emit CreditConfirmed(user, token, usdEquivalent, pointsToCredit, points[user]);
     }
 
     // --- Withdrawals ---
@@ -241,10 +244,6 @@ contract AiCreditVault is UUPSUpgradeable {
     // --- Admin Config ---
     function setCoinFeeFee(address token, uint256 feeBps) external onlyOwner {
         coinFee[token] = feeBps;
-    }
-
-    function setWithdrawalFee(uint256 feeBps) external onlyOwner {
-        withdrawalFeeBps = feeBps;
     }
 
     function setPointUsdRate(uint256 microUsdPerPoint) external onlyOwner {
