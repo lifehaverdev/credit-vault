@@ -37,9 +37,10 @@ pragma solidity ^0.8.28;
 import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {Initializable} from "solady/utils/Initializable.sol";
+import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {ERC20} from "solady/tokens/ERC20.sol";
 
-contract AiCreditVault is UUPSUpgradeable, Initializable {
+contract AiCreditVault is UUPSUpgradeable, Initializable, ReentrancyGuard {
 
     // --- Structs ---
     struct Receipt {
@@ -63,6 +64,7 @@ contract AiCreditVault is UUPSUpgradeable, Initializable {
     mapping(address => mapping(address => uint256)) public reconciliation; // Timestamp of last credit confirmation
     mapping(address => uint256) public warChest;
     mapping(address => uint256) public coinFee; // token => feeBps
+    mapping(address => bool) public isGoodCoin;
     address[MAX_ACCEPTED_TOKENS] public goodCoins;
     mapping(address => bool) public isStationThis; // Backend addresses
 
@@ -78,8 +80,12 @@ contract AiCreditVault is UUPSUpgradeable, Initializable {
     modifier onlyBackend() {
         require(isStationThis[msg.sender], "Not authorized backend");
         _;
-    }
+    }   
 
+    /// @notice Restricts function access to the current owner of token MiladyStation NFT ID 598.
+    /// @dev This enforces ownership via an ERC721 `ownerOf(uint256)` call, rather than OpenZeppelin's Ownable pattern.
+    ///      The NFT address is hardcoded as 0xB24BaB1732D34cAD0A7C7035C3539aEC553bF3a0.
+    ///      If the token is transferred, contract control transfers with it. 
     modifier onlyOwner() {
         (, bytes memory data) = (0xB24BaB1732D34cAD0A7C7035C3539aEC553bF3a0).call(abi.encodeWithSelector(0x6352211e, 598));
         require(abi.decode(data, (address)) == msg.sender, "Not the owner of the token");
@@ -90,6 +96,7 @@ contract AiCreditVault is UUPSUpgradeable, Initializable {
     function initialize(address[] calldata tokens, address backend) external initializer {
         for (uint256 i = 0; i < tokens.length && i < MAX_ACCEPTED_TOKENS; ++i) {
             goodCoins[i] = tokens[i];
+            isGoodCoin[tokens[i]] = true;
         }
         isStationThis[backend] = true;
 
@@ -106,6 +113,8 @@ contract AiCreditVault is UUPSUpgradeable, Initializable {
     // --- Deposit / Credit ---
 
     receive() external payable {
+        Receipt storage last = collateral[msg.sender][address(0)];
+        require(last.amount == 0 || last.points > 0, "CreditVault: last deposit not confirmed");
         collateral[msg.sender][address(0)] = Receipt({
             amount: msg.value,
             points: 0, // Points are 0 until confirmed by backend
@@ -114,18 +123,15 @@ contract AiCreditVault is UUPSUpgradeable, Initializable {
         emit Deposit(msg.sender, address(0), msg.value);
     }
 
-    function deposit(address token, uint256 amount) external {
+    function deposit(address token, uint256 amount) external nonReentrant {
         require(amount > 0, "Amount must be greater than 0");
-        bool tokenFound = false;
-        for (uint256 i = 0; i < goodCoins.length; ++i) {
-            if (goodCoins[i] == token) {
-                tokenFound = true;
-                break;
-            }
-        }
-        require(tokenFound, "Token not accepted");
+        Receipt storage last = collateral[msg.sender][token];
+        // Allow deposit if it's the first one (amount == 0) OR if the last one was confirmed (points > 0)
+        require(last.amount == 0 || last.points > 0, "CreditVault: last deposit not confirmed");
+        require(isGoodCoin[token], "Token not accepted");
 
-        ERC20(token).transferFrom(msg.sender, address(this), amount);
+        // ERC20(token).transferFrom(msg.sender, address(this), amount);
+        SafeTransferLib.safeTransferFrom(token, msg.sender, address(this), amount);
 
         collateral[msg.sender][token] = Receipt({
             amount: amount,
@@ -155,7 +161,7 @@ contract AiCreditVault is UUPSUpgradeable, Initializable {
     }
 
     // --- Withdrawals ---
-    function requestWithdrawal(address token) external {
+    function requestWithdrawal(address token) external nonReentrant {
         Receipt storage receipt = collateral[msg.sender][token];
         uint256 amountToWithdraw = receipt.amount;
 
@@ -188,7 +194,7 @@ contract AiCreditVault is UUPSUpgradeable, Initializable {
         uint256 amount, // Expected to be the full collateral amount for this user/token
         uint256 pointsBurned,
         uint256 usdCreditedAtDeposit // Assumed to be used by backend for its logic, not directly in these on-chain token calculations
-    ) external onlyBackend {
+    ) external onlyBackend nonReentrant {
         Receipt storage receipt = collateral[user][token];
 
         // Validate inputs and state
@@ -205,8 +211,12 @@ contract AiCreditVault is UUPSUpgradeable, Initializable {
         if (receipt.points > 0 && receipt.points > pointsBurned) { // Avoid division by zero if receipt.points is 0 (and pointsBurned is also 0)
             valueOfPointsBurnedInToken = (receipt.amount * pointsBurned) / receipt.points;
         } else {
-            // This case implies pointsBurned is also 0 due to the require above.
-            // If receipt.points is 0 and pointsBurned is 0, then no value was burned.
+            // If pointsBurned is >= receipt.points (or receipt.points is 0),
+            // the value of burned points converted to tokens is considered 0 for this calculation.
+            // This means the user will receive their full `receipt.amount` back (less fees),
+            // but `points[user]` will still be debited by the full `pointsBurned`,
+            // potentially leading to a negative `points[user]` balance.
+            // This behavior is highlighted in `testWithdrawToExceedsCreditShouldRevert`.
             valueOfPointsBurnedInToken = 0;
         }
 
@@ -242,7 +252,7 @@ contract AiCreditVault is UUPSUpgradeable, Initializable {
     }
 
     // --- Admin Config ---
-    function setCoinFeeFee(address token, uint256 feeBps) external onlyOwner {
+    function setCoinFee(address token, uint256 feeBps) external onlyOwner {
         coinFee[token] = feeBps;
     }
 
@@ -256,13 +266,14 @@ contract AiCreditVault is UUPSUpgradeable, Initializable {
 
     // --- Utility ---
     function multicall(bytes[] calldata data) external onlyBackend {
+        require(msg.sender == tx.origin, "Multicall can only be called by the origin");
         for (uint256 i = 0; i < data.length; ++i) {
             (bool success, ) = address(this).delegatecall(data[i]);
             require(success, "Multicall failed");
         }
     }
 
-    function performCalldata(bytes calldata data) external onlyOwner {
+    function performCalldata(bytes calldata data) external onlyOwner payable {
         // --- Pre-execution snapshot --- 
         address[MAX_ACCEPTED_TOKENS + 1] memory tokens_to_monitor;
         uint256 monitor_count = 0;
@@ -326,10 +337,14 @@ contract AiCreditVault is UUPSUpgradeable, Initializable {
             if (balance_after < balances_before[i]) { // Tokens were sent out
                 uint256 amount_sent_out = balances_before[i] - balance_after;
                 require(amount_sent_out <= war_chests_before[i], "performCalldata: War chest funds compromised by call");
+                // Update warChest to reflect the expenditure
+                warChest[token] = war_chests_before[i] - amount_sent_out;
             }
-            // If balance_after >= balances_before[i], no net tokens were sent out (or tokens were received).
-            // In this case, (balances_before[i] - balance_after) is <= 0. 
-            // The condition amount_sent_out (which would be 0 or negative) <= war_chests_before[i] (which is >=0) holds.
+            // If balance_after >= balances_before[i], it means no net tokens were sent out for this specific token
+            // (either tokens were received, or the balance is unchanged).
+            // In this scenario, the warChest for this token is not decremented by this spend check.
+            // The warChest is not intended to be *incremented* by arbitrary inflows via performCalldata;
+            // it is primarily funded by fees and burned points from withdrawTo.
         }
     }
 
