@@ -74,27 +74,19 @@ struct CollateralRecord {
 ## 🔁 Deposit and Credit Lifecycle
 
 User deposits ETH/ERC20
-
 Emits Deposit(user, token, amount)
 
 Bot confirms credit value
-
 Calls confirmCredit(user, token, usdAmount)
-
 Emits CreditConfirmed(user, token, usdAmount)
 
 points[user] updated
-
 reconciliation[user][token] timestamp updated
-
 collateral[user][token] updated (amount, creditedUsd, feeBps)
 
 On Repeated Deposits:
-
 CollateralRecord is overwritten
-
 No per-deposit average/batch history is kept
-
 User assumes accounting risk for blending basis value
 
 ## ⚖️ Withdrawal Flow
@@ -102,21 +94,14 @@ User assumes accounting risk for blending basis value
 User signals intent: requestWithdrawal(token, amount) → emits WithdrawalRequested(...)
 
 Bot processes withdrawal:
-
 Calculates refund based on:
-
 credited USD at deposit time
-
 points spent
-
 fee in BPS
 
 Calls withdrawTo(...)
-
 Emits WithdrawReconciled(...)
-
 Contract checks balances and sends ETH or ERC20
-
 Remaining value (after spend/fee) → protocolCollateral[token]
 
 # Withdrawal is Bot-Only:
@@ -151,101 +136,67 @@ forge script        # run deployment or vanity farming scripts
 💰 Fee Policy
 
 Token-specific withdrawal fees stored in acceptedToken[token]
-
 Higher fees can be assigned to volatile/meme tokens
-
 Fallback withdrawalFeeBps used if token-specific fee unset
-
 Fees collected → protocolCollateral
 
 ## 📈 Deposit-Time Price Locking
 
 Credit value locked on confirmation (confirmCredit)
-
 No revaluation at withdrawal
-
 Predictable accounting + reduced manipulation risk
 
 Implications:
 
 Bull Market → protocol can harvest upside
-
 Bear Market → user holds price risk
-
 Fair for all parties; ensures internal accounting integrity
 
 ## 🔍 Strategic Liquidation
 
 Bot can preemptively reconcile/spend portions of collateral
-
 Enables protocol to rebalance holdings
-
 Example: liquidate high-performing token balances before price decline
 
 ## 🛠 Admin & Execution Functions
 
 confirmCredit(user, token, usdAmount)
-
 withdrawTo(user, token, amount, pointsBurned, usdCreditedAtDeposit)
-
 requestWithdrawal(token, amount)
-
 setAcceptedTokenFee(token, bps)
-
 setWithdrawalFee(uint256)
-
 setPointUsdRate(uint256)
-
 addBackend(addr) / removeBackend(addr)
-
 batchWithdraw(...)
-
 performCalldata(bytes calldata)
 
 performCalldata Safety Logic
-
 Pre-execution snapshot:
-
 For all accepted tokens, record balanceOf(address(this))
-
 Ensure ≥ protocolCollateral[token]
 
 Execute calldata
-
 Post-execution check:
-
 New balanceOf(this) must ≥ updated protocolCollateral[token]
-
 If balance reduced, it must not exceed allowable difference
-
 Update protocolCollateral accordingly
-
 Guarantees user assets are never misappropriated.
 
 ## 🔐 Protocol-Owned Assets
 
 Stored separately in protocolCollateral
-
 Represents:
-
 Seized funds from credit spend
-
 Fees collected
-
 Available for admin operations: arbitrage, revenue distribution, liquidity
-
 No user association; no creditedUsd or per-deposit basis needed
 
 ## 🛡 Security Model
 
 Users cannot self-withdraw after confirmation
-
 Admin-only reconciliation and withdrawal ensure offchain alignment
-
 Credit system uses points, a stable non-volatile accounting unit
-
 Event log provides full audit trail (confirmations, withdrawals, reconciliation)
-
 points[user] can go negative to support debt-based accounts
 
 ## 📚 Resources
@@ -261,11 +212,7 @@ points[user] can go negative to support debt-based accounts
 ## Summary
 
 The AiCreditVault system supports:
-
 Hybrid off-chain/on-chain accounting for AI credit management
-
 Transparent, secure deposits with fixed price basis
-
 Protected admin controls with user safety enforcement
-
 Protocol-level tools for liquidity, arbitrage, and strategic withdrawals
