@@ -3,13 +3,13 @@ pragma solidity ^0.8.19;
 
 import "forge-std/Script.sol";
 import {ERC1967Factory} from "solady/utils/ERC1967Factory.sol";
-import {AiCreditVault} from "../../src/implementation/CreditVault.sol";
+import {VaultRoot} from "../../src/VaultRoot.sol";
 
 contract FarmVanitySalt is Script {
     bytes2 constant TARGET_PREFIX = 0x1152;
 
     function run(address implementation) external view {
-        address factory = 0x0000000000006396FF2a80c067f99B3d2Ab4Df24; // Replace with actual factory
+        address factory = 0x0000000000006396FF2a80c067f99B3d2Ab4Df24;
         address admin = 0x1821BD18CBdD267CE4e389f893dDFe7BEB333aB6; // The owner/admin of the deployed proxy
 
         // Init calldata: encode initialize(tokens[], backend)
@@ -18,7 +18,7 @@ contract FarmVanitySalt is Script {
         address backend = implementation;
 
         bytes memory initData = abi.encodeWithSelector(
-            AiCreditVault.initialize.selector,
+            VaultRoot.initialize.selector,
             tokens,
             backend
         );
