@@ -13,6 +13,7 @@ interface IERC721 {
     function safeTransferFrom(address from, address to, uint256 tokenId) external;
     function approve(address to, uint256 tokenId) external;
     function tokensOfOwner(address owner) external view returns (uint256[] memory);
+    function ownerOf(uint256 tokenId) external view returns (address);
 }
 
 contract VaultTest is Test {
@@ -67,6 +68,10 @@ contract VaultTest is Test {
         // Set initial backend
         vm.prank(admin);
         root.setBackend(backend, true);
+
+        // Allow backend operations. The name is confusing: setFreeze(true) sets backendAllowed = true.
+        vm.prank(admin);
+        root.setFreeze(true);
     }
 
     // --- Helper Functions ---
@@ -263,35 +268,25 @@ contract VaultTest is Test {
     }
 
     function test_nftBlessEscrow_movesFromProtocolEscrow() public {
-        // Given: VaultRoot has an NFT in its own custody, which we'll move to escrow.
-        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
-        require(tokenIds.length >= 1, "Whale needs at least 1 NFT for this test.");
-        uint256 protocolNftId = tokenIds[0];
-
-        // 1. Transfer an NFT to the VaultRoot to be owned by the protocol.
-        vm.startPrank(MSWhale);
-        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, address(root), protocolNftId);
-        vm.stopPrank();
-
-        // 2. Backend confirms credit for the protocol itself, moving the NFT to protocol escrow.
-        vm.startPrank(backend);
-        root.confirmCredit(address(root), address(root), MILADYSTATION, 1, 0, "");
-        vm.stopPrank();
+        // Given: VaultRoot has 1 NFT in protocol escrow.
+        // We will directly manipulate storage to set this up, bypassing confirmCredit.
+        bytes32 protocolKey = _getCustodyKey(address(root), MILADYSTATION);
+        bytes32 protocolBalance = _packAmount(0, 1); // 0 userOwned, 1 escrow
+        vm.store(address(root), keccak256(abi.encode(protocolKey, 0)), protocolBalance);
 
         // Check that protocol has 1 in escrow
-        bytes32 protocolKey = _getCustodyKey(address(root), MILADYSTATION);
         (uint128 protocolUserOwned, uint128 protocolEscrow) = _splitAmount(root.custody(protocolKey));
         assertEq(protocolUserOwned, 0, "Protocol userOwned should be 0");
         assertEq(protocolEscrow, 1, "Protocol escrow should be 1");
 
-        // 3. Backend blesses the user with 1 NFT escrow
+        // When: backend blesses the user with 1 NFT escrow
         vm.startPrank(backend);
         vm.expectEmit(true, true, true, true);
         emit CreditConfirmed(address(root), user, MILADYSTATION, 1, 0, "BLESSED");
         root.blessEscrow(user, MILADYSTATION, 1);
         vm.stopPrank();
 
-        // 4. Then: user's custody shows +1 escrow, protocol's escrow is decremented by 1
+        // Then: user's custody shows +1 escrow, protocol's escrow is decremented by 1
         bytes32 userKey = _getCustodyKey(user, MILADYSTATION);
         (, uint128 userEscrow) = _splitAmount(root.custody(userKey));
         assertEq(userEscrow, 1, "User escrow should be 1");
@@ -303,9 +298,35 @@ contract VaultTest is Test {
 
     function test_nftWithdrawTo_byBackend_transfersNFT() public {
         // Given: user has 1 escrowed NFT
-        // When: backend withdrawTo() user with amount = 1, token = miladyStation
+        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
+        require(tokenIds.length > 0, "MSWhale does not own any MiladyStation tokens for this test.");
+        uint256 tokenId = tokenIds[0];
+
+        // 1. User deposits NFT
+        vm.startPrank(MSWhale);
+        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, address(root), tokenId);
+        vm.stopPrank();
+
+        // 2. Backend confirms credit to move it to escrow
+        vm.startPrank(backend);
+        root.confirmCredit(address(root), MSWhale, MILADYSTATION, 1, 0, "confirm");
+        vm.stopPrank();
+
+        // 3. When: backend withdrawTo() user with amount = 1, token = miladyStation
+        vm.startPrank(backend);
+        vm.expectEmit(true, true, true, true);
+        emit WithdrawalProcessed(address(root), MSWhale, MILADYSTATION, 1, 0, "withdraw");
+        root.withdrawTo(MSWhale, MILADYSTATION, 1, 0, "withdraw");
+        vm.stopPrank();
+
         // Then: NFT is transferred from vaultRoot to user
+        assertEq(IERC721(MILADYSTATION).ownerOf(tokenId), MSWhale);
+        
         // And: custody[user][miladyStation] escrow is decremented
+        bytes32 userKey = _getCustodyKey(MSWhale, MILADYSTATION);
+        (uint128 userOwned, uint128 escrow) = _splitAmount(root.custody(userKey));
+        assertEq(userOwned, 0, "User userOwned should be 0");
+        assertEq(escrow, 0, "User escrow should be 0");
     }
 
     function test_nftWithdraw_userOwned_returnsNFT() public {
