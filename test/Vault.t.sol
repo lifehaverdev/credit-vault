@@ -11,6 +11,8 @@ import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {Initializable} from "solady/utils/Initializable.sol";
 import {IVaultRoot} from "../src/interfaces/IVaultRoot.sol";
 import {NoReceiver} from "./mocks/NoReceiver.sol";
+import {ReentrancyERC20} from "./mocks/ReentrancyERC20.sol";
+import {ReentrancyAttacker} from "./mocks/ReentrancyAttacker.sol";
 
 interface IERC721 {
     function safeTransferFrom(address from, address to, uint256 tokenId) external;
@@ -99,10 +101,24 @@ contract VaultTest is Test {
     // --- Admin & Setup ---
     function test_initialState() public {
         // Tests that the root contract is initialized with the correct owner and that the initial backend is set.
+        assertEq(IERC721(MILADYSTATION).ownerOf(MS_TOKEN_ID), admin, "Admin should be the owner of the NFT");
+        assertTrue(root.isBackend(backend), "Initial backend should be set");
+        assertTrue(root.backendAllowed(), "Backend operations should be allowed initially");
+        assertFalse(root.refund(), "Refund mode should be off initially");
     }
 
     function test_setBackend_byOwner_succeeds() public {
-        // Tests that the owner can add and remove a backend address.
+        vm.prank(admin);
+        vm.expectEmit(true, true, true, true);
+        emit BackendStatusChanged(anotherUser, true);
+        root.setBackend(anotherUser, true);
+        assertTrue(root.isBackend(anotherUser), "New backend should be authorized");
+
+        vm.prank(admin);
+        vm.expectEmit(true, true, true, true);
+        emit BackendStatusChanged(anotherUser, false);
+        root.setBackend(anotherUser, false);
+        assertFalse(root.isBackend(anotherUser), "Backend should be de-authorized");
     }
 
     function test_onlyOwnerFunctions_revertForEOA() public {
@@ -113,11 +129,26 @@ contract VaultTest is Test {
     }
 
     function test_setFreeze_byOwner_succeeds() public {
-        // Tests that the owner can freeze and unfreeze backend operations.
+        // Freeze
+        vm.prank(admin);
+        vm.expectEmit(true, true, true, true);
+        emit OperatorFreeze(false);
+        root.setFreeze(false);
+        assertFalse(root.backendAllowed(), "Backend operations should be frozen");
+
+        // Unfreeze
+        vm.prank(admin);
+        vm.expectEmit(true, true, true, true);
+        emit OperatorFreeze(true);
+        root.setFreeze(true);
+        assertTrue(root.backendAllowed(), "Backend operations should be unfrozen");
     }
 
     function test_setFreeze_byNonOwner_reverts() public {
-        // Tests that a non-owner cannot freeze the contract.
+        vm.startPrank(user);
+        vm.expectRevert("Not the owner of the token");
+        root.setFreeze(false);
+        vm.stopPrank();
     }
 
     // --- Standard User Flow (Direct VaultRoot Interaction) ---
@@ -147,18 +178,35 @@ contract VaultTest is Test {
         assertEq(escrow, 0, "escrow balance should be 0");
     }
 
-    function test_root_deposit_eth() public {
-        // A standard user sends ETH directly to the VaultRoot via receive().
-        // Checks if the userOwned balance for the user is correctly updated.
-    }
-
     function test_root_depositFor_byBackend_succeeds() public {
-        // The backend deposits tokens into a standard user's account on their behalf.
-        // Checks if the userOwned balance is correctly increased.
+        uint256 depositAmount = 1_000_000 * 1e18; // 1M PEPE
+        
+        // 1. Fund the backend with PEPE from the whale
+        vm.prank(pepeWhale);
+        ERC20(PEPE).transfer(backend, depositAmount);
+
+        // 2. Backend approves root and deposits for the user
+        vm.startPrank(backend);
+        ERC20(PEPE).approve(address(root), depositAmount);
+
+        vm.expectEmit(true, true, true, true);
+        emit DepositRecorded(address(root), user, PEPE, depositAmount);
+
+        root.depositFor(user, PEPE, depositAmount);
+        vm.stopPrank();
+
+        // 3. Check custody for the target user
+        bytes32 custodyKey = _getCustodyKey(user, PEPE);
+        (uint128 userOwned, uint128 escrow) = _splitAmount(root.custody(custodyKey));
+        assertEq(userOwned, depositAmount, "userOwned balance should be updated for the specified user");
+        assertEq(escrow, 0, "escrow balance should be 0");
     }
 
     function test_root_depositFor_byNonBackend_reverts() public {
-        // A non-backend address attempts to use depositFor and fails.
+        vm.startPrank(user);
+        vm.expectRevert("Not backend");
+        root.depositFor(anotherUser, PEPE, 1_000_000 * 1e18);
+        vm.stopPrank();
     }
 
     function test_backend_confirmCredit_movesToEscrow() public {
@@ -266,14 +314,38 @@ contract VaultTest is Test {
         assertEq(protocolEscrow, protocolAmount, "Protocol escrow should not change");
     }
 
-    function test_root_withdraw_userOwned_succeeds() public {
-        // A standard user has an unconfirmed deposit (all in userOwned).
-        // The user calls withdraw() and successfully gets their tokens back.
-    }
-
     function test_root_withdraw_partial_userOwned() public {
-        // A user has a mix of userOwned and escrow funds.
-        // The user calls withdraw() and only gets the userOwned portion back, leaving escrow untouched.
+        uint256 depositAmount = 1_000_000 * 1e18;
+        uint256 escrowAmount = depositAmount / 2;
+        uint256 userOwnedAmount = depositAmount - escrowAmount;
+
+        // 1. User deposits PEPE
+        vm.startPrank(pepeWhale);
+        ERC20(PEPE).approve(address(root), depositAmount);
+        root.deposit(PEPE, depositAmount);
+        vm.stopPrank();
+
+        // 2. Backend confirms credit for half
+        vm.prank(backend);
+        root.confirmCredit(address(root), pepeWhale, PEPE, escrowAmount, 0, "");
+        vm.stopPrank();
+
+        // 3. User withdraws
+        uint256 balance_before = ERC20(PEPE).balanceOf(pepeWhale);
+        vm.startPrank(pepeWhale);
+        vm.expectEmit(true, true, true, true);
+        emit UserWithdrawal(address(root), pepeWhale, PEPE, userOwnedAmount);
+        root.withdraw(PEPE);
+        vm.stopPrank();
+
+        // 4. Check balances
+        uint256 balance_after = ERC20(PEPE).balanceOf(pepeWhale);
+        assertEq(balance_after, balance_before + userOwnedAmount, "User balance should increase by userOwned amount");
+
+        bytes32 custodyKey = _getCustodyKey(pepeWhale, PEPE);
+        (uint128 userOwned_after, uint128 escrow_after) = _splitAmount(root.custody(custodyKey));
+        assertEq(userOwned_after, 0, "userOwned should be zero after withdrawal");
+        assertEq(escrow_after, escrowAmount, "escrow should be unchanged");
     }
 
     function test_backendWithdrawTo_erc20_sendsEscrow() public {
@@ -322,7 +394,30 @@ contract VaultTest is Test {
     }
 
     function test_root_withdrawTo_insufficientEscrow_reverts() public {
-        // Backend attempts to withdrawTo more than is available in escrow and the call fails.
+        // 1. Setup user escrow balance
+        uint256 depositAmount = 1_000_000 * 1e18;
+        vm.startPrank(pepeWhale);
+        ERC20(PEPE).approve(address(root), depositAmount);
+        root.deposit(PEPE, depositAmount);
+        vm.stopPrank();
+
+        vm.prank(backend);
+        root.confirmCredit(address(root), pepeWhale, PEPE, depositAmount, 0, "confirm");
+        vm.stopPrank();
+
+        // 2. Attempt to withdraw more than available in escrow
+        uint256 withdrawAmount = depositAmount + 1;
+        uint128 fee = 0;
+
+        vm.startPrank(backend);
+        vm.expectRevert("Insufficient escrow balance");
+        root.withdrawTo(pepeWhale, PEPE, withdrawAmount, fee, "withdraw");
+        vm.stopPrank();
+
+        // 3. Check internal custody is unchanged
+        bytes32 userKey = _getCustodyKey(pepeWhale, PEPE);
+        (, uint128 userEscrow) = _splitAmount(root.custody(userKey));
+        assertEq(userEscrow, depositAmount, "User escrow should be unchanged");
     }
 
     function test_ethDeposit_updatesCustody() public {
@@ -375,23 +470,92 @@ contract VaultTest is Test {
 
     // --- Power User Flow (VaultAccount Interaction) ---
     function test_createVaultAccount_succeeds() public {
-        // Backend successfully creates a new VaultAccount for a user.
-        // Checks if the account is registered in VaultRoot and owned by the correct user.
+        bytes32 salt = keccak256("test_salt");
+
+        vm.startPrank(backend);
+        address accountAddress = root.createVaultAccount(user, salt);
+        vm.stopPrank();
+
+        assertTrue(root.isVaultAccount(accountAddress), "Account should be registered in root");
+
+        VaultAccount vaultAccount = VaultAccount(payable(accountAddress));
+        assertEq(vaultAccount.owner(), user, "Account owner should be the user");
+        assertEq(address(vaultAccount.vaultRoot()), address(root), "Account should point to the correct root");
     }
 
     function test_createVaultAccount_predictableAddress() public {
-        // Verifies that the address of a new VaultAccount can be deterministically predicted off-chain.
+        bytes32 salt = keccak256("predictable_salt");
+        
+        // Predict address
+        bytes memory bytecode = type(VaultAccount).creationCode;
+        bytes memory constructorArgs = abi.encode(address(root), user);
+        bytes32 initCodeHash = keccak256(abi.encodePacked(bytecode, constructorArgs));
+        
+        address predictedAddress = address(uint160(uint256(keccak256(abi.encodePacked(
+            bytes1(0xff),
+            address(root),
+            salt,
+            initCodeHash
+        )))));
+
+        // Create account
+        vm.prank(backend);
+        address actualAddress = root.createVaultAccount(user, salt);
+        
+        assertEq(actualAddress, predictedAddress, "Created address should match predicted address");
     }
 
     function test_account_deposit_erc20() public {
-        // A user deposits an ERC20 token into their own VaultAccount.
-        // Checks if the userOwned balance is updated in the VaultAccount's custody.
-        // Also checks that VaultRoot emits the correct recordDeposit event.
+        // 1. Create account
+        vm.prank(backend);
+        address accountAddress = root.createVaultAccount(user, "salt");
+        VaultAccount vaultAccount = VaultAccount(payable(accountAddress));
+
+        // 2. Deposit PEPE into the account
+        uint256 depositAmount = 1_000_000e18;
+        vm.startPrank(pepeWhale);
+        ERC20(PEPE).approve(accountAddress, depositAmount);
+        
+        // Expect event from VaultAccount first, then from VaultRoot
+        vm.expectEmit(true, true, true, true);
+        emit DepositRecorded(accountAddress, pepeWhale, PEPE, depositAmount);
+        vm.expectEmit(true, true, true, true);
+        emit DepositRecorded(accountAddress, pepeWhale, PEPE, depositAmount);
+
+        vaultAccount.deposit(PEPE, depositAmount);
+        vm.stopPrank();
+
+        // 3. Check custody in the vault account
+        bytes32 custodyKey = _getCustodyKey(pepeWhale, PEPE);
+        (uint128 userOwned, uint128 escrow) = _splitAmount(vaultAccount.custody(custodyKey));
+        assertEq(userOwned, depositAmount, "userOwned balance in account should be updated");
+        assertEq(escrow, 0, "escrow should be 0");
     }
 
     function test_account_deposit_eth() public {
-        // A user deposits ETH into their own VaultAccount.
-        // Checks for correct state updates in the VaultAccount's custody.
+        // 1. Create account
+        vm.prank(backend);
+        address accountAddress = root.createVaultAccount(user, "salt");
+
+        // 2. Deposit ETH into the account
+        uint256 depositAmount = 2 ether;
+        vm.startPrank(anotherUser);
+
+        // Expect event from VaultAccount first, then from VaultRoot
+        vm.expectEmit(true, true, true, true);
+        emit DepositRecorded(accountAddress, anotherUser, address(0), depositAmount);
+        vm.expectEmit(true, true, true, true);
+        emit DepositRecorded(accountAddress, anotherUser, address(0), depositAmount);
+
+        (bool success, ) = accountAddress.call{value: depositAmount}("");
+        require(success, "ETH transfer to account failed");
+        vm.stopPrank();
+
+        // 3. Check custody in the vault account for the sender
+        bytes32 custodyKey = _getCustodyKey(anotherUser, address(0));
+        (uint128 userOwned, uint128 escrow) = _splitAmount(VaultAccount(payable(accountAddress)).custody(custodyKey));
+        assertEq(userOwned, depositAmount, "userOwned balance in account should be updated");
+        assertEq(escrow, 0, "escrow should be 0");
     }
 
     function test_account_depositFor_byBackend_succeeds() public {
@@ -414,26 +578,98 @@ contract VaultTest is Test {
 
     // --- Security & Edge Cases ---
     function test_userWithdraw_succeeds_whenFrozen() public {
-        // Owner freezes the contract.
-        // A standard user should still be able to withdraw their userOwned balance from VaultRoot.
+        uint256 depositAmount = 1 ether;
+        vm.startPrank(user);
+        (bool success, ) = address(root).call{value: depositAmount}("");
+        require(success, "ETH deposit failed");
+        vm.stopPrank();
+
+        // Freeze the contract
+        vm.startPrank(admin);
+        root.setFreeze(false);
+        vm.stopPrank();
+        assertFalse(root.backendAllowed(), "Backend should be frozen");
+
+        // User can still withdraw
+        uint256 balance_before = user.balance;
+        vm.startPrank(user);
+        root.withdraw(address(0));
+        uint256 balance_after = user.balance;
+
+        assertTrue(balance_after > balance_before, "User ETH balance should increase after withdrawal");
     }
 
     function test_accountWithdraw_succeeds_whenFrozen() public {
-        // Owner freezes the contract.
-        // A power user should still be able to withdraw their userOwned balance from their VaultAccount.
+        // 1. Create account and deposit ETH
+        vm.startPrank(backend);
+        address accountAddress = root.createVaultAccount(user, "salt");
+        vm.stopPrank();
+        VaultAccount vaultAccount = VaultAccount(payable(accountAddress));
+        
+        uint256 depositAmount = 1 ether;
+        vm.startPrank(user);
+        (bool success, ) = accountAddress.call{value: depositAmount}("");
+        require(success, "ETH deposit to account failed");
+        vm.stopPrank();
+
+        // 2. Freeze the root contract
+        vm.startPrank(admin);
+        root.setFreeze(false);
+        vm.stopPrank();
+        assertFalse(root.backendAllowed(), "Backend should be frozen");
+
+        // 3. User can still withdraw from their account
+        uint256 balance_before = user.balance;
+        vm.startPrank(user);
+        vaultAccount.withdraw(address(0));
+        uint256 balance_after = user.balance;
+
+        assertTrue(balance_after > balance_before, "User ETH balance should increase after account withdrawal");
     }
 
     function test_onlyVaultAccount_modifier() public {
-        // An external address tries to call a function guarded by onlyVaultAccount on VaultRoot and fails.
-        // Example: recordDeposit.
+        vm.startPrank(user);
+        vm.expectRevert("Not vault account");
+        root.recordDeposit(user, PEPE, 1 ether);
     }
 
     function test_reentrancy_deposit() public {
-        // Verifies that the deposit functions are protected against re-entrancy attacks.
+        // 1. Deploy the malicious token
+        ReentrancyERC20 maliciousToken = new ReentrancyERC20(address(root), user);
+        uint256 depositAmount = 100 * 1e18;
+
+        // 2. Approve and attempt to deposit
+        vm.startPrank(user);
+        maliciousToken.approve(address(root), depositAmount);
+
+        // 3. Expect revert from ReentrancyGuard
+        // We use a try/catch block because of weirdness with vm.expectRevert and SafeTransferLib's error.
+        bool revertCaught = false;
+        try root.deposit(address(maliciousToken), depositAmount) {
+            // This should not be reached
+        } catch {
+            revertCaught = true;
+        }
+
+        assertTrue(revertCaught, "Expected deposit to revert due to re-entrancy");
+        vm.stopPrank();
     }
 
     function test_reentrancy_withdraw() public {
-        // Verifies that the withdraw functions are protected against re-entrancy attacks.
+        // 1. Deploy the attacker contract
+        ReentrancyAttacker attacker = new ReentrancyAttacker(address(root));
+        uint256 depositAmount = 1 ether;
+
+        // 2. Fund the attacker and have it deposit into the vault
+        vm.deal(address(attacker), depositAmount);
+        attacker.deposit{value: depositAmount}();
+
+        // 3. Initiate the attack, which should revert
+        vm.prank(address(attacker));
+        // The ReentrancyGuard in Solady reverts with an empty message.
+        // vm.expectRevert("Reentrant call");
+        vm.expectRevert();
+        attacker.attack();
     }
 
     function test_nftDeposit_updatesCustody_correctly() public {
