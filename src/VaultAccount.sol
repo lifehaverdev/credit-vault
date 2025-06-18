@@ -112,14 +112,23 @@ contract VaultAccount is Ownable, ReentrancyGuard {
             emit UserWithdrawal(address(this),msg.sender, token, userOwned);
             vaultRoot.recordWithdrawal(msg.sender, token, userOwned, 0, "");
         }else{
-            emit WithdrawalRequested(address(this),msg.sender,token);
-            vaultRoot.recordWithdrawalRequest(msg.sender, token, 0);
+            if(vaultRoot.refund()){
+                if (token == address(0)) {
+                    SafeTransferLib.safeTransferETH(msg.sender, escrow);
+                } else {
+                    SafeTransferLib.safeTransfer(token, msg.sender, escrow);
+                }
+            } else {
+                emit WithdrawalRequested(address(this),msg.sender,token);
+                vaultRoot.recordWithdrawalRequest(msg.sender, token);
+            }
+            
         }
     }
 
     function withdrawTo(address user, address token, uint256 amount, uint128 fee, bytes calldata metadata) external onlyBackend nonReentrant {
         bytes32 key = _getCustodyKey(user, token);
-        (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
+        (, uint128 escrow) = _splitAmount(custody[key]);
         require(escrow >= amount + fee, "Insufficient escrow balance");
         escrow -= uint128(amount);
         if (fee > 0) {
@@ -139,6 +148,25 @@ contract VaultAccount is Ownable, ReentrancyGuard {
         }
         emit WithdrawalProcessed(address(this), user, token, amount, fee, metadata);
         vaultRoot.recordWithdrawal(user, token, amount, fee, metadata);
+    }
+
+    function blessEscrow(address user, address token, uint256 amount) external onlyBackend {
+        bytes32 protocolKey = _getCustodyKey(address(this), token);
+        (, uint128 protocolEscrow) = _splitAmount(custody[protocolKey]);
+
+        require(protocolEscrow >= amount, "Not enough in protocol escrow");
+
+        bytes32 userKey = _getCustodyKey(user, token);
+        (uint128 userOwned, uint128 userEscrow) = _splitAmount(custody[userKey]);
+
+        // Subtract from protocol escrow
+        protocolEscrow -= uint128(amount);
+        custody[protocolKey] = _packAmount(0, protocolEscrow);
+
+        // Add to user escrow
+        custody[userKey] = _packAmount(userOwned, userEscrow + uint128(amount));
+
+        emit CreditConfirmed(address(this), user, token, amount, 0, "BLESSED");
     }
 
     // --- Admin & Utility ---

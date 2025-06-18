@@ -63,9 +63,11 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
     mapping(address => bool) public isVaultAccount;
     mapping(address => bool) public isBackend;
     bool backendAllowed = true;
+    bool refund = false;
 
     // Gnosis Safe Singleton Factory
     ICreate2Factory private constant CREATE2_FACTORY = ICreate2Factory(0x0000000000006396FF2a80c067f99B3d2Ab4Df24);
+
     /*
        ______
       /\_____\     
@@ -85,10 +87,19 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
     event BackendStatusChanged(address indexed backend, bool isAuthorized);
     event Liquidation(address indexed vaultAccount, address indexed user, address indexed token, uint256 fee, bytes metadata);
     event OperatorFreeze(bool isFrozen);
+    event RefundChanged(bool isRefund);
+
     /*
-    
+       ______
+      /\_____\     
+     _\ \__/_/_   
+    /\_\ \_____\  /// MODIFIERS ///
+    \ \ \/ / / /   
+     \ \/ /\/ /   
+      \/_/\/_/    
+
     */
-    // --- Modifiers ---
+
     /// @notice Restricts function access to the current owner of token MiladyStation NFT ID 598.
     /// @dev This enforces ownership via an ERC721 `ownerOf(uint256)` call, rather than OpenZeppelin's Ownable pattern.
     ///      The NFT address is hardcoded as 0xB24BaB1732D34cAD0A7C7035C3539aEC553bF3a0.
@@ -111,11 +122,11 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
     }
     
     /*
-           ____
-          /\___\  /// HELPER FUNCTIONS ///
-         /\ \___\
-         \ \/ / /
-          \/_/_/ 
+      ____
+     /\___\  /// HELPER FUNCTIONS ///
+    /\ \___\
+    \ \/ / /
+     \/_/_/ 
 
     */
     function _getCustodyKey(address user, address token) internal pure returns (bytes32) {
@@ -130,7 +141,17 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
         return bytes32(uint256(userOwned) | (uint256(escrow) << 128));
     }
 
-    // --- Owner & Backend Management ---
+    /*
+       ______
+      /\_____\     
+     _\ \__/_/_   
+    /\_\ \_____\  /// OWNER & OPERATOR MANAGEMENT ///
+    \ \ \/ / / /   
+     \ \/ /\/ /   
+      \/_/\/_/    
+
+    */
+
     function setBackend(address _backend, bool _isAuthorized) external onlyOwner {
         isBackend[_backend] = _isAuthorized;
         emit BackendStatusChanged(_backend, _isAuthorized);
@@ -141,7 +162,11 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
         emit OperatorFreeze(isFrozen);
     }
 
-    // --- Core Logic ---
+    function setRefund(bool _refund) external onlyOwner {
+        refund = _refund;
+        emit RefundChanged(_refund);
+    }
+
     function createVaultAccount(address _owner, bytes32 _salt) external onlyBackend returns (address) {
         bytes memory bytecode = type(VaultAccount).creationCode;
         bytes memory constructorArgs = abi.encode(address(this), _owner);
@@ -154,11 +179,73 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
         return account;
     }
 
+    function multicall(bytes[] calldata data) external onlyBackend {
+        require(msg.sender == tx.origin, "Multicall can only be called by the origin");
+        for (uint256 i = 0; i < data.length; ++i) {
+            (bool success, ) = address(this).delegatecall(data[i]);
+            require(success, "Multicall failed");
+        }
+    }
+    
+    function performCalldata(address target, bytes calldata data) external payable onlyOwner {
+        (bool success, ) = target.call{value: msg.value}(data);
+        require(success, "Execution failed");
+    }
+
+    function blessEscrow(address user, address token, uint256 amount) external onlyBackend {
+        bytes32 protocolKey = _getCustodyKey(address(this), token);
+        (, uint128 protocolEscrow) = _splitAmount(custody[protocolKey]);
+
+        require(protocolEscrow >= amount, "Not enough in protocol escrow");
+
+        bytes32 userKey = _getCustodyKey(user, token);
+        (uint128 userOwned, uint128 userEscrow) = _splitAmount(custody[userKey]);
+
+        // Subtract from protocol escrow
+        protocolEscrow -= uint128(amount);
+        custody[protocolKey] = _packAmount(0, protocolEscrow);
+
+        // Add to user escrow
+        custody[userKey] = _packAmount(userOwned, userEscrow + uint128(amount));
+
+        emit CreditConfirmed(address(this), user, token, amount, 0, "BLESSED");
+    }
+
+    /*
+       ______
+      /\_____\     
+     _\ \__/_/_   
+    /\_\ \_____\  /// DEPOSITS ///
+    \ \ \/ / / /   
+     \ \/ /\/ /   
+      \/_/\/_/    
+
+    */
+
     receive() external payable {
         bytes32 key = _getCustodyKey(msg.sender, address(0));
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
         custody[key] = _packAmount(userOwned + uint128(msg.value), escrow);
         emit DepositRecorded(address(this), msg.sender, address(0), msg.value);
+    }
+
+    /// @notice Handles ERC721 token transfers into the vault
+    /// @dev Returns the selector required to accept ERC721s
+    function onERC721Received(
+        address,
+        address from,
+        uint256,
+        bytes calldata
+    ) external returns (bytes4) {
+        // Treat `msg.sender` as the NFT contract address
+        bytes32 key = _getCustodyKey(from, msg.sender);
+        (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
+
+        // We increment the user’s count of NFTs from this contract
+        custody[key] = _packAmount(userOwned + 1, escrow);
+
+        emit DepositRecorded(address(this), from, msg.sender, 1); // tokenId is not stored here, just count
+        return 0x150b7a02; // IERC721Receiver.onERC721Received.selector
     }
 
     function deposit(address token, uint256 amount) external nonReentrant {
@@ -182,7 +269,67 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
         emit DepositRecorded(msg.sender, user, token, amount);
     }
 
-    function recordWithdrawalRequest(address user, address token, uint256 amount) external onlyVaultAccount nonReentrant {
+    /*
+       ______
+      /\_____\     
+     _\ \__/_/_   
+    /\_\ \_____\  /// WITHDRAWALS ///
+    \ \ \/ / / /   
+     \ \/ /\/ /   
+      \/_/\/_/    
+
+    */
+
+    function withdraw(address token) external nonReentrant {
+        // Here msg.sender is the user
+        bytes32 key = _getCustodyKey(msg.sender, token);
+        (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
+        if(userOwned > 0){
+            //In the case that operators are frozen, and credit cannot be confirmed, 
+            //Allow a user to withdraw their userOwned balance
+            if (token == address(0)) {
+                SafeTransferLib.safeTransferETH(msg.sender, userOwned);
+            } else {
+                SafeTransferLib.safeTransfer(token, msg.sender, userOwned);
+            }
+            custody[key] =  _packAmount(0, escrow);
+            emit UserWithdrawal(address(this),msg.sender, token, userOwned);
+        }else{
+            if(refund){
+                if (token == address(0)) {
+                    SafeTransferLib.safeTransferETH(msg.sender, escrow);
+                } else {
+                    SafeTransferLib.safeTransfer(token, msg.sender, escrow);
+                }
+            }
+            emit WithdrawalRequested(address(this),msg.sender,token);
+        }
+    }
+
+    function withdrawTo(address user, address token, uint256 amount, uint128 fee, bytes calldata metadata) external onlyBackend nonReentrant {
+        bytes32 key = _getCustodyKey(user, token);
+        (, uint128 escrow) = _splitAmount(custody[key]);
+        require(escrow >= amount + fee, "Insufficient escrow balance");
+        escrow -= uint128(amount);
+        if (fee > 0) {
+            bytes32 accountKey = _getCustodyKey(address(this), token);
+            (, uint128 protocolEscrow) = _splitAmount(custody[accountKey]);
+            custody[accountKey] =  _packAmount(0, protocolEscrow + fee);
+            if(amount == 0){
+                emit Liquidation(address(this), user, token, fee, metadata);
+            }
+        }
+        if (amount > 0) {
+            if (token == address(0)) {
+                SafeTransferLib.safeTransferETH(user, amount);
+            } else {
+                SafeTransferLib.safeTransfer(token, user, amount);
+            }
+        }
+        emit WithdrawalProcessed(address(this), user, token, amount, fee, metadata);
+    }
+
+    function recordWithdrawalRequest(address user, address token) external onlyVaultAccount nonReentrant {
         emit WithdrawalRequested(msg.sender, user, token);
     }
 
@@ -204,64 +351,20 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
         emit CreditConfirmed(vaultAccount, user, token, escrowAmount, fee, metadata);
     }
 
-    // --- Withdrawals ---
-    function withdraw(address token) external nonReentrant {
-        // Here msg.sender is the user
-        bytes32 key = _getCustodyKey(msg.sender, token);
-        (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
-        if(userOwned > 0){
-            //In the case that operators are frozen, and credit cannot be confirmed, 
-            //Allow a user to withdraw their userOwned balance
-            if (token == address(0)) {
-                SafeTransferLib.safeTransferETH(msg.sender, userOwned);
-            } else {
-                SafeTransferLib.safeTransfer(token, msg.sender, userOwned);
-            }
-            custody[key] =  _packAmount(0, escrow);
-            emit UserWithdrawal(address(this),msg.sender, token, userOwned);
-        }else{
-            emit WithdrawalRequested(address(this),msg.sender,token);
-        }
-    }
+    /*
 
-    function withdrawTo(address user, address token, uint256 amount, uint128 fee, bytes calldata metadata) external onlyBackend nonReentrant {
-        bytes32 key = _getCustodyKey(user, token);
-        (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
-        require(escrow >= amount + fee, "Insufficient escrow balance");
-        escrow -= uint128(amount);
-        if (fee > 0) {
-            bytes32 accountKey = _getCustodyKey(address(this), token);
-            (, uint128 protocolEscrow) = _splitAmount(custody[accountKey]);
-            custody[accountKey] =  _packAmount(0, protocolEscrow + fee);
-            if(amount == 0){
-                emit Liquidation(address(this), user, token, fee, metadata);
-            }
-        }
-        if (amount > 0) {
-            if (token == address(0)) {
-                SafeTransferLib.safeTransferETH(user, amount);
-            } else {
-                SafeTransferLib.safeTransfer(token, user, amount);
-            }
-        }
-        emit WithdrawalProcessed(address(this), user, token, amount, fee, metadata);
-    }
+    ________
+   /_______/\
+   \ \    / /
+ ___\ \__/_/___     /// UPGRADEABILITY ///
+/____\ \______/\
+\ \   \/ /   / /
+ \ \  / /\  / /
+  \ \/ /\ \/ /
+   \_\/  \_\/
 
-    // --- Admin & Utility ---
-    function multicall(bytes[] calldata data) external onlyBackend {
-        require(msg.sender == tx.origin, "Multicall can only be called by the origin");
-        for (uint256 i = 0; i < data.length; ++i) {
-            (bool success, ) = address(this).delegatecall(data[i]);
-            require(success, "Multicall failed");
-        }
-    }
-    
-    function performCalldata(address target, bytes calldata data) external payable onlyOwner {
-        (bool success, ) = target.call{value: msg.value}(data);
-        require(success, "Execution failed");
-    }
-
-    /// Upgradeability ///
+   
+    */
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
     /// Initialization ///

@@ -12,7 +12,7 @@ import {Initializable} from "solady/utils/Initializable.sol";
 contract VaultTest is Test {
     VaultRoot root;
 
-    address admin;
+    address admin = 0x1821BD18CBdD267CE4e389f893dDFe7BEB333aB6;
     address backend;
     address user;
     address anotherUser;
@@ -22,7 +22,6 @@ contract VaultTest is Test {
     address internal pepeWhale = 0x4a2C786651229175407d3A2D405d1998bcf40614;
 
     function setUp() public {
-        admin = makeAddr("admin");
         backend = makeAddr("backend");
         user = makeAddr("user");
         anotherUser = makeAddr("anotherUser");
@@ -183,4 +182,215 @@ contract VaultTest is Test {
     function test_reentrancy_withdraw() public {
         // Verifies that the withdraw functions are protected against re-entrancy attacks.
     }
+
+    function test_nftDeposit_updatesCustody_correctly() public {
+        // Given: Whale owns a MiladyStation NFT (tokenId 598)
+        // And: Whale approves VaultRoot to receive NFT
+        // When: Whale safeTransfers NFT to VaultRoot
+
+        // Then: custody[whale][miladyStation] increments by 1
+        // And: DepositRecorded emitted with amount = 1
+    }
+
+    function test_nftDeposit_emitsCorrectEvent() public {
+        // Expect: DepositRecorded(vaultRoot, whale, miladyStation, 1)
+        // When: whale safeTransfers tokenId to vaultRoot
+    }
+
+    function test_nftBlessEscrow_movesFromProtocolEscrow() public {
+        // Given: VaultRoot has 3 NFTs in escrow under address(this), tracked in custody
+        // When: backend blesses user with 1 NFT escrow
+        // Then: user's custody shows +1 escrow, protocol's escrow is decremented by 1
+    }
+
+    function test_nftWithdrawTo_byBackend_transfersNFT() public {
+        // Given: user has 1 escrowed NFT
+        // When: backend withdrawTo() user with amount = 1, token = miladyStation
+        // Then: NFT is transferred from vaultRoot to user
+        // And: custody[user][miladyStation] escrow is decremented
+    }
+
+    function test_nftWithdraw_userOwned_returnsNFT() public {
+        // Given: user safeTransfers NFT to vault
+        // When: user calls withdraw()
+        // Then: NFT is returned to user
+        // And: userOwned is reset to 0
+    }
+
+    function test_nftGlobalUnlock_allowsEscrowWithdrawal() public {
+        // Given: user has escrowed NFTs
+        // And: owner flips isGlobalEscrowUnlocked = true
+        // When: user calls withdraw()
+        // Then: both userOwned and escrowed NFTs are returned
+    }
+
+    function test_nftDeposit_failsWithoutOnERC721Receiver() public {
+        // Given: a contract without onERC721Received
+        // When: NFT is sent to that contract
+        // Then: transaction reverts
+    }
+
+
+
+    // --- Event Emission Tests ---
+    // function test_event_depositRecorded() public {
+    //     // Tests that the DepositRecorded event is emitted correctly when a user deposits.
+    //     // Checks event args: vaultAccount, user, token, amount
+    // }
+
+    // function test_event_creditConfirmed() public {
+    //     // Tests that the CreditConfirmed event is emitted correctly when backend confirms credit.
+    //     // Checks event args: vaultAccount, user, token, amount, fee, metadata
+    // }
+
+    // function test_event_withdrawalProcessed() public {
+    //     // Tests that the WithdrawalProcessed event is emitted correctly when backend processes a withdrawal.
+    //     // Checks event args: vaultAccount, user, token, amount, fee, metadata
+    // }
+
+    // function test_event_userWithdrawal() public {
+    //     // Tests that the UserWithdrawal event is emitted correctly when a user withdraws their userOwned balance.
+    //     // Checks event args: vaultAccount, user, token, amount
+    // }
+
+    // function test_event_liquidation() public {
+    //     // Tests that the Liquidation event is emitted correctly when a fee is charged with zero withdrawal.
+    //     // Checks event args: vaultAccount, user, token, fee, metadata
+    // }
+
+    // --- Utility & Admin Function Tests ---
+    // function test_multicall_byBackend_succeeds() public {
+    //     // Tests that the backend can successfully execute multiple calls in a single transaction.
+    //     // Checks that all operations in the batch are executed correctly.
+    // }
+
+    // function test_multicall_byNonBackend_reverts() public {
+    //     // Tests that non-backend addresses cannot use the multicall function.
+    // }
+
+    // function test_multicall_nonOrigin_reverts() public {
+    //     // Tests that multicall reverts when called by a contract (not tx.origin).
+    // }
+
+    // function test_performCalldata_byOwner_succeeds() public {
+    //     // Tests that the owner can successfully execute arbitrary calldata on a target contract.
+    // }
+
+    // function test_performCalldata_byNonOwner_reverts() public {
+    //     // Tests that non-owner addresses cannot use the performCalldata function.
+    // }
+
+    // --- Edge Cases & Boundary Tests ---
+    // function test_zeroValueOperations() public {
+    //     // Tests behavior with zero-value deposits, credits, and withdrawals.
+    // }
+
+    // function test_maxUint128Values() public {
+    //     // Tests behavior when userOwned or escrow values approach uint128 max.
+    // }
+
+    // function test_unexpectedTokens() public {
+    //     // Tests what happens when tokens are sent directly to the contract without using deposit functions.
+    // }
+
+    // --- Gas Optimization Tests ---
+    // function testGas_deposit() public {
+    //     // Measures gas usage for standard deposit operations.
+    // }
+
+    // function testGas_confirmCredit() public {
+    //     // Measures gas usage for backend credit confirmation.
+    // }
+
+    // function testGas_withdrawTo() public {
+    //     // Measures gas usage for backend-initiated withdrawals.
+    // }
+
+    // function testGas_createVaultAccount() public {
+    //     // Measures gas usage for VaultAccount creation.
+    // }
+
+    // function testGas_multicall_vs_individual() public {
+    //     // Compares gas usage between multicall and individual function calls.
+    // }
+
+    // --- Upgradeability Tests ---
+    // function test_upgrade_byOwner_succeeds() public {
+    //     // Tests that the owner can successfully upgrade the VaultRoot implementation.
+    //     // 1. Deploy a new implementation contract
+    //     // 2. Upgrade the proxy to point to the new implementation
+    //     // 3. Verify the upgrade was successful by checking new functionality
+    // }
+
+    // function test_upgrade_byNonOwner_reverts() public {
+    //     // Tests that non-owner addresses cannot upgrade the VaultRoot implementation.
+    // }
+
+    // function test_upgrade_statePreservation() public {
+    //     // Tests that contract state (custody balances, backend addresses, etc.) is preserved during an upgrade.
+    // }
+
+    // function test_upgrade_withInitializer() public {
+    //     // Tests upgrading with a new implementation that has an initializer function.
+    //     // Uses upgradeToAndCall instead of upgradeTo.
+    // }
+
+    // --- Integration Tests ---
+    // function test_fullLifecycle_standardUser() public {
+    //     // Tests a complete lifecycle for a standard user:
+    //     // 1. Deposit
+    //     // 2. Credit confirmation
+    //     // 3. Partial withdrawal
+    //     // 4. Additional deposit
+    //     // 5. Full withdrawal
+    // }
+
+    // function test_fullLifecycle_powerUser() public {
+    //     // Tests a complete lifecycle for a power user with a VaultAccount:
+    //     // 1. VaultAccount creation
+    //     // 2. Deposit
+    //     // 3. Credit confirmation
+    //     // 4. Partial withdrawal
+    //     // 5. Additional deposit
+    //     // 6. Full withdrawal
+    // }
+
+    function test_vaultAccount_nftDeposit_updatesCustody() public {
+        // Given: a user owns a Milady NFT
+        // And: the user approves the VaultAccount to receive NFTs
+        // When: the user calls safeTransferFrom() to VaultAccount
+        // Then: custody[user][nftAddress] increments by 1
+        // And: DepositRecorded emitted from VaultAccount
+        // And: VaultRoot.recordDeposit() is called
+    }
+
+    function test_vaultAccount_nftBlessEscrow_movesFromProtocolEscrow() public {
+        // Given: VaultAccount has 2 NFTs held in its own custody
+        // When: backend calls blessEscrow(user, nftAddress, 1)
+        // Then: user's custody[user][nftAddress].escrow += 1
+        // And: custody[address(this)][nftAddress].escrow -= 1
+    }
+
+    function test_vaultAccount_nftWithdrawTo_transfersNFT() public {
+        // Given: user has 1 escrowed NFT
+        // When: backend calls withdrawTo(user, nftAddress, 1, 0, ...)
+        // Then: NFT is sent from VaultAccount to user
+        // And: VaultRoot.recordWithdrawal is called
+    }
+
+    function test_vaultAccount_nftWithdraw_userOwned_returnsNFT() public {
+        // Given: user owns 1 NFT in VaultAccount (userOwned)
+        // When: user calls withdraw()
+        // Then: NFT is returned to user
+        // And: VaultRoot.recordWithdrawal() is called
+    }
+
+    function test_vaultAccount_globalUnlock_withdrawsEscrowedNFT() public {
+        // Given: VaultRoot.refund() returns true
+        // And: user has escrowed NFT
+        // When: user calls withdraw()
+        // Then: escrowed NFT is returned to user
+        // And: custody[escrow] reduced
+    }
+
 } 
