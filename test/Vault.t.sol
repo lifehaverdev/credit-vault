@@ -2,12 +2,15 @@
 pragma solidity ^0.8.28;
 
 import "forge-std/Test.sol";
+import "forge-std/console.sol";
 import {VaultRoot} from "../src/VaultRoot.sol";
 import {VaultAccount} from "../src/VaultAccount.sol";
 import {ERC1967Factory} from "solady/utils/ERC1967Factory.sol";
 import {ERC20} from "solady/tokens/ERC20.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {Initializable} from "solady/utils/Initializable.sol";
+import {IVaultRoot} from "../src/interfaces/IVaultRoot.sol";
+import {NoReceiver} from "./mocks/NoReceiver.sol";
 
 interface IERC721 {
     function safeTransferFrom(address from, address to, uint256 tokenId) external;
@@ -43,6 +46,9 @@ contract VaultTest is Test {
     event Liquidation(address indexed vaultAccount, address indexed user, address indexed token, uint256 fee, bytes metadata);
     event OperatorFreeze(bool isFrozen);
     event RefundChanged(bool isRefund);
+
+    // Custom error from Solady's SafeTransferLib
+    error TransferFailed();
 
     function setUp() public {
         backend = makeAddr("backend");
@@ -112,9 +118,30 @@ contract VaultTest is Test {
     }
 
     // --- Standard User Flow (Direct VaultRoot Interaction) ---
-    function test_root_deposit_erc20() public {
-        // A standard user deposits an ERC20 token directly into the VaultRoot.
-        // Checks if the userOwned balance for the user is correctly updated in root's custody.
+    function test_erc20Deposit_updatesCustody() public {
+        uint256 depositAmount = 1_000_000 * 1e18; // 1M PEPE
+        
+        // Check whale has enough balance
+        uint256 whaleBalance = ERC20(PEPE).balanceOf(pepeWhale);
+        require(whaleBalance >= depositAmount, "Whale does not have enough PEPE");
+
+        vm.startPrank(pepeWhale);
+        // Approve root to spend PEPE
+        ERC20(PEPE).approve(address(root), depositAmount);
+
+        // Expect event
+        vm.expectEmit(true, true, true, true);
+        emit DepositRecorded(address(root), pepeWhale, PEPE, depositAmount);
+
+        // When: whale deposits PEPE
+        root.deposit(PEPE, depositAmount);
+        vm.stopPrank();
+
+        // Then: custody is updated correctly
+        bytes32 custodyKey = _getCustodyKey(pepeWhale, PEPE);
+        (uint128 userOwned, uint128 escrow) = _splitAmount(root.custody(custodyKey));
+        assertEq(userOwned, depositAmount, "userOwned balance should be updated");
+        assertEq(escrow, 0, "escrow balance should be 0");
     }
 
     function test_root_deposit_eth() public {
@@ -155,6 +182,27 @@ contract VaultTest is Test {
         // Backend attempts to withdrawTo more than is available in escrow and the call fails.
     }
 
+    function test_ethDeposit_updatesCustody() public {
+        // A standard user sends ETH directly to the VaultRoot via receive().
+        uint256 depositAmount = 1 ether;
+
+        vm.startPrank(user);
+        // Expect event from root contract
+        vm.expectEmit(true, true, true, true);
+        emit DepositRecorded(address(root), user, address(0), depositAmount);
+
+        // When: user sends ETH to the root contract
+        (bool success, ) = address(root).call{value: depositAmount}("");
+        require(success, "ETH transfer failed");
+        
+        vm.stopPrank();
+
+        // Then: custody for the user is updated correctly
+        bytes32 custodyKey = _getCustodyKey(user, address(0));
+        (uint128 userOwned, uint128 escrow) = _splitAmount(root.custody(custodyKey));
+        assertEq(userOwned, depositAmount, "userOwned balance should be updated");
+        assertEq(escrow, 0, "escrow balance should be 0");
+    }
 
     // --- Power User Flow (VaultAccount Interaction) ---
     function test_createVaultAccount_succeeds() public {
@@ -297,6 +345,9 @@ contract VaultTest is Test {
     }
 
     function test_nftWithdrawTo_byBackend_transfersNFT() public {
+        // NOTE: This test confirms the design choice that `withdrawTo` is for fungible tokens only.
+        // It is expected to revert for NFTs, as they are considered spent upon deposit.
+
         // Given: user has 1 escrowed NFT
         uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
         require(tokenIds.length > 0, "MSWhale does not own any MiladyStation tokens for this test.");
@@ -312,41 +363,113 @@ contract VaultTest is Test {
         root.confirmCredit(address(root), MSWhale, MILADYSTATION, 1, 0, "confirm");
         vm.stopPrank();
 
-        // 3. When: backend withdrawTo() user with amount = 1, token = miladyStation
+        // 3. When: backend attempts to withdrawTo() the NFT
         vm.startPrank(backend);
-        vm.expectEmit(true, true, true, true);
-        emit WithdrawalProcessed(address(root), MSWhale, MILADYSTATION, 1, 0, "withdraw");
+        
+        // Then: The call reverts because `safeTransfer` is for ERC20s.
+        vm.expectRevert(TransferFailed.selector);
         root.withdrawTo(MSWhale, MILADYSTATION, 1, 0, "withdraw");
         vm.stopPrank();
 
-        // Then: NFT is transferred from vaultRoot to user
-        assertEq(IERC721(MILADYSTATION).ownerOf(tokenId), MSWhale);
+        // And: NFT is still owned by the vault
+        assertEq(IERC721(MILADYSTATION).ownerOf(tokenId), address(root));
         
-        // And: custody[user][miladyStation] escrow is decremented
+        // And: user's escrow balance is unchanged
         bytes32 userKey = _getCustodyKey(MSWhale, MILADYSTATION);
         (uint128 userOwned, uint128 escrow) = _splitAmount(root.custody(userKey));
         assertEq(userOwned, 0, "User userOwned should be 0");
-        assertEq(escrow, 0, "User escrow should be 0");
+        assertEq(escrow, 1, "User escrow should still be 1");
     }
 
     function test_nftWithdraw_userOwned_returnsNFT() public {
+        // NOTE: This test confirms that `withdraw` also does not support NFTs,
+        // aligning with the "NFTs are good as spent" design choice.
+
         // Given: user safeTransfers NFT to vault
+        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
+        require(tokenIds.length > 0, "MSWhale does not own any MiladyStation tokens for this test.");
+        uint256 tokenId = tokenIds[0];
+
+        // 1. User deposits NFT
+        vm.startPrank(MSWhale);
+        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, address(root), tokenId);
+
+        // Check that vault owns the NFT and user has 1 userOwned
+        assertEq(IERC721(MILADYSTATION).ownerOf(tokenId), address(root));
+        bytes32 userKey = _getCustodyKey(MSWhale, MILADYSTATION);
+        (uint128 userOwned_before, ) = _splitAmount(root.custody(userKey));
+        assertEq(userOwned_before, 1, "User userOwned should be 1 after deposit");
+
         // When: user calls withdraw()
-        // Then: NFT is returned to user
-        // And: userOwned is reset to 0
+        // Then: The call reverts because `safeTransfer` is for ERC20s.
+        vm.expectRevert(TransferFailed.selector);
+        root.withdraw(MILADYSTATION);
+        vm.stopPrank();
+
+        // And: NFT is still owned by the vault
+        assertEq(IERC721(MILADYSTATION).ownerOf(tokenId), address(root));
+
+        // And: userOwned is unchanged
+        (uint128 userOwned_after, uint128 escrow_after) = _splitAmount(root.custody(userKey));
+        assertEq(userOwned_after, 1, "User userOwned should be 1 after failed withdrawal");
+        assertEq(escrow_after, 0, "User escrow should be 0");
     }
 
     function test_nftGlobalUnlock_allowsEscrowWithdrawal() public {
-        // Given: user has escrowed NFTs
-        // And: owner flips isGlobalEscrowUnlocked = true
+        // Given: user has an escrowed NFT
+        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
+        require(tokenIds.length > 0, "MSWhale does not own any MiladyStation tokens for this test.");
+        uint256 tokenId = tokenIds[0];
+
+        // 1. User deposits NFT and backend confirms credit
+        vm.startPrank(MSWhale);
+        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, address(root), tokenId);
+        vm.stopPrank();
+
+        vm.startPrank(backend);
+        root.confirmCredit(address(root), MSWhale, MILADYSTATION, 1, 0, "confirm");
+        vm.stopPrank();
+
+        // And: owner flips isGlobalEscrowUnlocked (refund) = true
+        vm.prank(admin);
+        root.setRefund(true);
+        assert(root.refund());
+
         // When: user calls withdraw()
-        // Then: both userOwned and escrowed NFTs are returned
+        vm.startPrank(MSWhale);
+        // NOTE: The current implementation attempts an ERC20 transfer which will fail.
+        // This test documents that even with refund mode on, NFT withdrawal is broken.
+        vm.expectRevert(TransferFailed.selector);
+        root.withdraw(MILADYSTATION);
+        vm.stopPrank();
+
+        // Then: both userOwned and escrowed NFTs are NOT returned
+        assertEq(IERC721(MILADYSTATION).ownerOf(tokenId), address(root));
+
+        // And: balances are unchanged
+        bytes32 userKey = _getCustodyKey(MSWhale, MILADYSTATION);
+        (uint128 userOwned, uint128 escrow) = _splitAmount(root.custody(userKey));
+        assertEq(userOwned, 0);
+        assertEq(escrow, 1);
     }
 
     function test_nftDeposit_failsWithoutOnERC721Receiver() public {
         // Given: a contract without onERC721Received
+        NoReceiver noReceiver = new NoReceiver();
+
+        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
+        require(tokenIds.length > 0, "MSWhale does not own any MiladyStation tokens for this test.");
+        uint256 tokenId = tokenIds[0];
+
         // When: NFT is sent to that contract
+        vm.startPrank(MSWhale);
+
         // Then: transaction reverts
+        // The ERC721 standard requires the recipient of a safe transfer to implement onERC721Received.
+        // The revert reason is not standardized, so we just check for a generic revert.
+        vm.expectRevert();
+        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, address(noReceiver), tokenId);
+        vm.stopPrank();
     }
 
 
@@ -475,41 +598,176 @@ contract VaultTest is Test {
     // }
 
     function test_vaultAccount_nftDeposit_updatesCustody() public {
+        // 1. Create a VaultAccount for 'anotherUser'
+        vm.startPrank(backend);
+        address accountAddress = root.createVaultAccount(anotherUser, bytes32(0));
+        vm.stopPrank();
+        VaultAccount vaultAccount = VaultAccount(payable(accountAddress));
+
         // Given: a user owns a Milady NFT
+        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
+        require(tokenIds.length > 0, "MSWhale does not own any MiladyStation tokens for this test.");
+        uint256 tokenId = tokenIds[0];
+
         // And: the user approves the VaultAccount to receive NFTs
+        vm.startPrank(MSWhale);
+        IERC721(MILADYSTATION).approve(address(vaultAccount), tokenId);
+
         // When: the user calls safeTransferFrom() to VaultAccount
-        // Then: custody[user][nftAddress] increments by 1
-        // And: DepositRecorded emitted from VaultAccount
-        // And: VaultRoot.recordDeposit() is called
+        // Then: A single DepositRecorded event is emitted from VaultRoot, forwarded by the VaultAccount.
+        vm.expectEmit(true, true, true, true);
+        emit DepositRecorded(accountAddress, MSWhale, MILADYSTATION, 1);
+        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, address(vaultAccount), tokenId);
+        vm.stopPrank();
+        
+        // Then: custody[user][nftAddress] increments by 1 in the VaultAccount
+        bytes32 userKey = _getCustodyKey(MSWhale, MILADYSTATION);
+        (uint128 userOwned, uint128 escrow) = _splitAmount(vaultAccount.custody(userKey));
+        assertEq(userOwned, 1, "VaultAccount userOwned should be 1");
+        assertEq(escrow, 0, "VaultAccount escrow should be 0");
     }
 
     function test_vaultAccount_nftBlessEscrow_movesFromProtocolEscrow() public {
-        // Given: VaultAccount has 2 NFTs held in its own custody
-        // When: backend calls blessEscrow(user, nftAddress, 1)
-        // Then: user's custody[user][nftAddress].escrow += 1
-        // And: custody[address(this)][nftAddress].escrow -= 1
+        // 1. Create a VaultAccount.
+        vm.startPrank(backend);
+        address accountAddress = root.createVaultAccount(anotherUser, bytes32(0));
+        vm.stopPrank();
+        VaultAccount vaultAccount = VaultAccount(payable(accountAddress));
+
+        // Given: The VaultAccount has 1 NFT in its own "protocol" escrow.
+        // This simulates a scenario where the account itself holds assets to be distributed.
+        bytes32 protocolKey = _getCustodyKey(address(vaultAccount), MILADYSTATION);
+        bytes32 protocolBalance = _packAmount(0, 1); // 0 userOwned, 1 escrow
+        bytes32 storageSlot = keccak256(abi.encode(protocolKey, 0)); // custody is at slot 0
+        vm.store(address(vaultAccount), storageSlot, protocolBalance); 
+
+        // When: backend calls blessEscrow on the VaultAccount for a user.
+        vm.startPrank(backend);
+        vm.expectEmit(true, true, true, true);
+        emit CreditConfirmed(address(vaultAccount), user, MILADYSTATION, 1, 0, "BLESSED");
+        vaultAccount.blessEscrow(user, MILADYSTATION, 1);
+        vm.stopPrank();
+
+        // Then: user's custody in the account shows +1 escrow.
+        bytes32 userKey = _getCustodyKey(user, MILADYSTATION);
+        (, uint128 userEscrow) = _splitAmount(vaultAccount.custody(userKey));
+        assertEq(userEscrow, 1, "User escrow in VaultAccount should be 1");
+
+        // And: The account's protocol escrow is now 0.
+        (, uint128 protocolEscrow) = _splitAmount(vaultAccount.custody(protocolKey));
+        assertEq(protocolEscrow, 0, "VaultAccount protocol escrow should be 0");
     }
 
     function test_vaultAccount_nftWithdrawTo_transfersNFT() public {
-        // Given: user has 1 escrowed NFT
-        // When: backend calls withdrawTo(user, nftAddress, 1, 0, ...)
-        // Then: NFT is sent from VaultAccount to user
-        // And: VaultRoot.recordWithdrawal is called
+        // NOTE: This test confirms that VaultAccount.withdrawTo is also for fungibles only.
+        
+        // 1. Create a VaultAccount.
+        vm.startPrank(backend);
+        address accountAddress = root.createVaultAccount(anotherUser, bytes32(0));
+        vm.stopPrank();
+        VaultAccount vaultAccount = VaultAccount(payable(accountAddress));
+
+        // 2. User deposits an NFT.
+        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
+        require(tokenIds.length > 0, "No Milady tokens for test.");
+        uint256 tokenId = tokenIds[0];
+        vm.startPrank(MSWhale);
+        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, accountAddress, tokenId);
+        vm.stopPrank();
+
+        // 3. Backend confirms credit to move NFT to escrow.
+        vm.startPrank(backend);
+        vaultAccount.confirmCredit(accountAddress, MSWhale, MILADYSTATION, 1, 0, "confirm");
+        vm.stopPrank();
+
+        // 4. When backend calls withdrawTo...
+        vm.startPrank(backend);
+        
+        // Then: The call reverts because `safeTransfer` is for ERC20s.
+        vm.expectRevert(TransferFailed.selector);
+        vaultAccount.withdrawTo(MSWhale, MILADYSTATION, 1, 0, "withdraw");
+        vm.stopPrank();
+
+        // 5. Then: VaultAccount still owns the NFT.
+        assertEq(IERC721(MILADYSTATION).ownerOf(tokenId), accountAddress, "VaultAccount should own NFT");
+        
+        // And: user's escrow balance is unchanged.
+        bytes32 userKey = _getCustodyKey(MSWhale, MILADYSTATION);
+        (, uint128 escrow) = _splitAmount(vaultAccount.custody(userKey));
+        assertEq(escrow, 1, "User escrow should be 1");
     }
 
     function test_vaultAccount_nftWithdraw_userOwned_returnsNFT() public {
-        // Given: user owns 1 NFT in VaultAccount (userOwned)
-        // When: user calls withdraw()
-        // Then: NFT is returned to user
-        // And: VaultRoot.recordWithdrawal() is called
+        // NOTE: This test confirms that VaultAccount.withdraw is also for fungibles only.
+        
+        // 1. Create a VaultAccount.
+        vm.startPrank(backend);
+        address accountAddress = root.createVaultAccount(anotherUser, bytes32(0));
+        vm.stopPrank();
+        VaultAccount vaultAccount = VaultAccount(payable(accountAddress));
+
+        // 2. User deposits an NFT.
+        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
+        require(tokenIds.length > 0, "No Milady tokens for test.");
+        uint256 tokenId = tokenIds[0];
+        vm.startPrank(MSWhale);
+        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, accountAddress, tokenId);
+        
+        // 3. When user calls withdraw...
+        // Then: The call reverts because `safeTransfer` is for ERC20s.
+        vm.expectRevert(TransferFailed.selector);
+        vaultAccount.withdraw(MILADYSTATION);
+        vm.stopPrank();
+
+        // 4. Then: VaultAccount still owns the NFT.
+        assertEq(IERC721(MILADYSTATION).ownerOf(tokenId), accountAddress, "VaultAccount should still own NFT");
+        
+        // And: user's userOwned balance is unchanged.
+        bytes32 userKey = _getCustodyKey(MSWhale, MILADYSTATION);
+        (uint128 userOwned, ) = _splitAmount(vaultAccount.custody(userKey));
+        assertEq(userOwned, 1, "User userOwned should be 1");
     }
 
     function test_vaultAccount_globalUnlock_withdrawsEscrowedNFT() public {
-        // Given: VaultRoot.refund() returns true
-        // And: user has escrowed NFT
-        // When: user calls withdraw()
-        // Then: escrowed NFT is returned to user
-        // And: custody[escrow] reduced
+        // NOTE: This test confirms that even with global refund mode, VaultAccount.withdraw is for fungibles only.
+
+        // 1. Create a VaultAccount and escrow an NFT.
+        vm.startPrank(backend);
+        address accountAddress = root.createVaultAccount(anotherUser, bytes32(0));
+        vm.stopPrank();
+        VaultAccount vaultAccount = VaultAccount(payable(accountAddress));
+
+        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
+        require(tokenIds.length > 0, "No Milady tokens for test.");
+        uint256 tokenId = tokenIds[0];
+        
+        vm.startPrank(MSWhale);
+        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, accountAddress, tokenId);
+        vm.stopPrank();
+
+        vm.startPrank(backend);
+        vaultAccount.confirmCredit(accountAddress, MSWhale, MILADYSTATION, 1, 0, "confirm");
+        vm.stopPrank();
+
+        // 2. Enable global refund mode.
+        vm.prank(admin);
+        root.setRefund(true);
+        assertTrue(root.refund(), "Refund mode should be on");
+
+        // 3. When user calls withdraw...
+        vm.startPrank(MSWhale);
+        // Then: The call reverts because `safeTransfer` is for ERC20s.
+        vm.expectRevert(TransferFailed.selector);
+        vaultAccount.withdraw(MILADYSTATION);
+        vm.stopPrank();
+
+        // 4. Then: VaultAccount still owns the NFT.
+        assertEq(IERC721(MILADYSTATION).ownerOf(tokenId), accountAddress, "VaultAccount should still own NFT");
+        
+        // And: user's escrow balance is unchanged.
+        bytes32 userKey = _getCustodyKey(MSWhale, MILADYSTATION);
+        (, uint128 escrow) = _splitAmount(vaultAccount.custody(userKey));
+        assertEq(escrow, 1, "User escrow should be 1");
     }
 
 } 

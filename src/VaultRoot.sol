@@ -62,11 +62,11 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
     mapping(bytes32 => bytes32) public custody; // vaultAccount => keccak256(user,token) => balance
     mapping(address => bool) public isVaultAccount;
     mapping(address => bool) public isBackend;
-    bool backendAllowed = true;
-    bool refund = false;
+    bool internal _backendAllowed = true;
+    bool public refund = false;
 
     // Gnosis Safe Singleton Factory
-    ICreate2Factory private constant CREATE2_FACTORY = ICreate2Factory(0x0000000000006396FF2a80c067f99B3d2Ab4Df24);
+    // ICreate2Factory private constant CREATE2_FACTORY = ICreate2Factory(0x0000000000006396FF2a80c067f99B3d2Ab4Df24);
 
     /*
        ______
@@ -112,7 +112,7 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
 
     modifier onlyBackend() {
         require(isBackend[msg.sender], "Not backend");
-        require(backendAllowed, "Operator Freeze");
+        require(_backendAllowed, "Operator Freeze");
         _;
     }
 
@@ -141,6 +141,10 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
         return bytes32(uint256(userOwned) | (uint256(escrow) << 128));
     }
 
+    function backendAllowed() external view returns (bool) {
+        return _backendAllowed;
+    }
+
     /*
        ______
       /\_____\     
@@ -158,7 +162,7 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
     }
 
     function setFreeze(bool isFrozen) external onlyOwner {
-        backendAllowed = isFrozen;
+        _backendAllowed = isFrozen;
         emit OperatorFreeze(isFrozen);
     }
 
@@ -172,7 +176,11 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
         bytes memory constructorArgs = abi.encode(address(this), _owner);
         bytes memory initCode = abi.encodePacked(bytecode, constructorArgs);
         
-        address account = CREATE2_FACTORY.deploy(initCode, _salt);
+        address account;
+        assembly {
+            account := create2(0, add(initCode, 0x20), mload(initCode), _salt)
+        }
+        require(account != address(0), "CREATE2_FAILED");
 
         isVaultAccount[account] = true;
         emit VaultAccountCreated(account, _owner, _salt);
@@ -241,7 +249,7 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
         bytes32 key = _getCustodyKey(from, msg.sender);
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
 
-        // We increment the user’s count of NFTs from this contract
+        // We increment the user's count of NFTs from this contract
         custody[key] = _packAmount(userOwned + 1, escrow);
 
         emit DepositRecorded(address(this), from, msg.sender, 1); // tokenId is not stored here, just count

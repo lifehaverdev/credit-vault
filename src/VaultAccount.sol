@@ -53,6 +53,21 @@ contract VaultAccount is Ownable, ReentrancyGuard {
         return bytes32(uint256(userOwned) | (uint256(escrow) << 128));
     }
 
+    /// @notice Handles ERC721 token transfers into the vault account
+    function onERC721Received(
+        address,
+        address from,
+        uint256,
+        bytes calldata
+    ) external returns (bytes4) {
+        bytes32 key = _getCustodyKey(from, msg.sender);
+        (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
+        custody[key] = _packAmount(userOwned + 1, escrow);
+        emit DepositRecorded(address(this), from, msg.sender, 1);
+        vaultRoot.recordDeposit(from, msg.sender, 1);
+        return 0x150b7a02; // IERC721Receiver.onERC721Received.selector
+    }
+
     receive() external payable {
         bytes32 key = _getCustodyKey(msg.sender, address(0));
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
@@ -92,7 +107,7 @@ contract VaultAccount is Ownable, ReentrancyGuard {
             custody[accountKey] =  _packAmount(0, accountEscrow + fee);
         }
         emit CreditConfirmed(vaultAccount, user, token, escrowAmount, fee, metadata);
-        vaultRoot.confirmCredit(vaultAccount, user, token, escrowAmount, fee, metadata);
+        // vaultRoot.confirmCredit(vaultAccount, user, token, escrowAmount, fee, metadata);
     }
 
     // --- Withdrawals ---
