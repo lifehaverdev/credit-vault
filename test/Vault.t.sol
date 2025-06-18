@@ -105,8 +105,11 @@ contract VaultTest is Test {
         // Tests that the owner can add and remove a backend address.
     }
 
-    function test_setBackend_byNonOwner_reverts() public {
-        // Tests that a non-owner cannot change backend addresses.
+    function test_onlyOwnerFunctions_revertForEOA() public {
+        vm.startPrank(user);
+        vm.expectRevert("Not the owner of the token");
+        root.setBackend(anotherUser, true);
+        vm.stopPrank();
     }
 
     function test_setFreeze_byOwner_succeeds() public {
@@ -158,9 +161,109 @@ contract VaultTest is Test {
         // A non-backend address attempts to use depositFor and fails.
     }
 
-    function test_root_confirmCredit_movesBalance() public {
+    function test_backend_confirmCredit_movesToEscrow() public {
         // After a standard user deposits, the backend confirms credit.
-        // Checks that the balance correctly moves from userOwned to escrow in root's custody.
+        uint256 depositAmount = 1_000_000 * 1e18; // 1M PEPE
+        
+        // 1. User deposits PEPE
+        vm.startPrank(pepeWhale);
+        ERC20(PEPE).approve(address(root), depositAmount);
+        root.deposit(PEPE, depositAmount);
+        vm.stopPrank();
+
+        // Check initial custody
+        bytes32 custodyKey = _getCustodyKey(pepeWhale, PEPE);
+        (uint128 userOwned_before, uint128 escrow_before) = _splitAmount(root.custody(custodyKey));
+        assertEq(userOwned_before, depositAmount);
+        assertEq(escrow_before, 0);
+
+        // 2. Backend confirms credit
+        vm.startPrank(backend);
+        uint256 amountToEscrow = depositAmount / 2;
+        
+        // Expect event
+        vm.expectEmit(true, true, true, true);
+        emit CreditConfirmed(address(root), pepeWhale, PEPE, amountToEscrow, 0, "");
+
+        root.confirmCredit(address(root), pepeWhale, PEPE, amountToEscrow, 0, "");
+        vm.stopPrank();
+
+        // 3. Check final custody
+        (uint128 userOwned_after, uint128 escrow_after) = _splitAmount(root.custody(custodyKey));
+        assertEq(userOwned_after, userOwned_before - amountToEscrow, "userOwned should decrease");
+        assertEq(escrow_after, escrow_before + amountToEscrow, "escrow should increase");
+    }
+
+    function test_backend_blessEscrow_usesProtocolBalance() public {
+        uint256 protocolAmount = 1_000_000 * 1e18;
+
+        // 1. Seed the protocol with PEPE
+        vm.startPrank(pepeWhale);
+        ERC20(PEPE).transfer(address(root), protocolAmount);
+        vm.stopPrank();
+
+        // The PEPE is now in the contract, but we need to assign it to the protocol's `userOwned` balance
+        // so we can then move it to the protocol's `escrow` balance for the test.
+        bytes32 protocolKey = _getCustodyKey(address(root), PEPE);
+
+        // Move the transferred amount to the protocol's "userOwned" balance using vm.store
+        vm.store(address(root), keccak256(abi.encode(protocolKey, 0)), _packAmount(uint128(protocolAmount), 0));
+        
+        // Use confirmCredit to move it to the protocol's *escrow* balance
+        vm.prank(backend);
+        root.confirmCredit(address(root), address(root), PEPE, protocolAmount, 0, "seed protocol");
+        vm.stopPrank();
+        
+        // Check protocol escrow balance
+        (, uint128 protocolEscrow_before) = _splitAmount(root.custody(protocolKey));
+        assertEq(protocolEscrow_before, protocolAmount, "Protocol should have escrow balance");
+
+        // 2. Bless the user with some of the protocol's escrow
+        vm.startPrank(backend);
+        uint256 amountToBless = protocolAmount / 4;
+
+        vm.expectEmit(true, true, true, true);
+        emit CreditConfirmed(address(root), user, PEPE, amountToBless, 0, "BLESSED");
+        root.blessEscrow(user, PEPE, amountToBless);
+        vm.stopPrank();
+
+        // 3. Check balances
+        bytes32 userKey = _getCustodyKey(user, PEPE);
+        (, uint128 userEscrow_after) = _splitAmount(root.custody(userKey));
+        assertEq(userEscrow_after, amountToBless, "User escrow should be blessed amount");
+
+        (, uint128 protocolEscrow_after) = _splitAmount(root.custody(protocolKey));
+        assertEq(protocolEscrow_after, protocolEscrow_before - amountToBless, "Protocol escrow should decrease");
+    }
+
+    function test_backend_blessEscrow_revertsIfInsufficient() public {
+        uint256 protocolAmount = 1_000_000 * 1e18;
+
+        // 1. Seed protocol escrow with PEPE
+        vm.startPrank(pepeWhale);
+        ERC20(PEPE).transfer(address(root), protocolAmount);
+        vm.stopPrank();
+        bytes32 protocolKey = _getCustodyKey(address(root), PEPE);
+        vm.store(address(root), keccak256(abi.encode(protocolKey, 0)), _packAmount(uint128(protocolAmount), 0));
+        vm.prank(backend);
+        root.confirmCredit(address(root), address(root), PEPE, protocolAmount, 0, "seed protocol");
+        vm.stopPrank();
+
+        // 2. Attempt to bless with more than is available
+        vm.startPrank(backend);
+        uint256 amountToBless = protocolAmount + 1;
+        
+        vm.expectRevert("Not enough in protocol escrow");
+        root.blessEscrow(user, PEPE, amountToBless);
+        vm.stopPrank();
+
+        // 3. Check balances are unchanged
+        bytes32 userKey = _getCustodyKey(user, PEPE);
+        (, uint128 userEscrow) = _splitAmount(root.custody(userKey));
+        assertEq(userEscrow, 0, "User escrow should not change");
+
+        (, uint128 protocolEscrow) = _splitAmount(root.custody(protocolKey));
+        assertEq(protocolEscrow, protocolAmount, "Protocol escrow should not change");
     }
 
     function test_root_withdraw_userOwned_succeeds() public {
@@ -173,9 +276,49 @@ contract VaultTest is Test {
         // The user calls withdraw() and only gets the userOwned portion back, leaving escrow untouched.
     }
 
-    function test_root_withdrawTo_byBackend_succeeds() public {
-        // A user has funds in escrow. The backend processes a withdrawal.
-        // Checks that the user receives the correct amount and the fee is handled correctly.
+    function test_backendWithdrawTo_erc20_sendsEscrow() public {
+        // 1. Setup user escrow balance
+        uint256 depositAmount = 1_000_000 * 1e18;
+        vm.startPrank(pepeWhale);
+        ERC20(PEPE).approve(address(root), depositAmount);
+        root.deposit(PEPE, depositAmount);
+        vm.stopPrank();
+
+        vm.prank(backend);
+        root.confirmCredit(address(root), pepeWhale, PEPE, depositAmount, 0, "confirm");
+        vm.stopPrank();
+
+        // 2. Backend withdraws funds to user with a fee
+        uint256 withdrawAmount = depositAmount / 2;
+        uint128 fee = 100 * 1e18; // 100 PEPE fee
+        
+        uint256 user_balance_before = ERC20(PEPE).balanceOf(pepeWhale);
+        uint256 protocol_balance_before = ERC20(PEPE).balanceOf(address(root));
+
+        vm.startPrank(backend);
+        vm.expectEmit(true, true, true, true);
+        emit WithdrawalProcessed(address(root), pepeWhale, PEPE, withdrawAmount, fee, "withdraw");
+        
+        root.withdrawTo(pepeWhale, PEPE, withdrawAmount, fee, "withdraw");
+        vm.stopPrank();
+
+        // 3. Check balances
+        uint256 user_balance_after = ERC20(PEPE).balanceOf(pepeWhale);
+        assertEq(user_balance_after, user_balance_before + withdrawAmount, "User balance should increase by withdraw amount");
+
+        uint256 protocol_balance_after = ERC20(PEPE).balanceOf(address(root));
+        // The protocol balance change is complex: it receives `depositAmount` and sends `withdrawAmount`.
+        // The net change is depositAmount - withdrawAmount. The fee is an internal accounting change.
+        assertEq(protocol_balance_after, protocol_balance_before - withdrawAmount, "Protocol balance should decrease by withdraw amount");
+        
+        // Check internal custody
+        bytes32 userKey = _getCustodyKey(pepeWhale, PEPE);
+        (, uint128 userEscrow) = _splitAmount(root.custody(userKey));
+        assertEq(userEscrow, depositAmount - withdrawAmount - fee, "User escrow should decrease by withdraw amount and fee");
+
+        bytes32 protocolKey = _getCustodyKey(address(root), PEPE);
+        (, uint128 protocolEscrow) = _splitAmount(root.custody(protocolKey));
+        assertEq(protocolEscrow, fee, "Protocol escrow should equal the fee");
     }
 
     function test_root_withdrawTo_insufficientEscrow_reverts() public {
@@ -202,6 +345,32 @@ contract VaultTest is Test {
         (uint128 userOwned, uint128 escrow) = _splitAmount(root.custody(custodyKey));
         assertEq(userOwned, depositAmount, "userOwned balance should be updated");
         assertEq(escrow, 0, "escrow balance should be 0");
+    }
+
+    function test_userWithdraw_eth_userOwned() public {
+        // 1. User deposits ETH to create a userOwned balance
+        uint256 depositAmount = 2 ether;
+        vm.prank(user);
+        (bool success, ) = address(root).call{value: depositAmount}("");
+        require(success, "ETH deposit failed");
+
+        // 2. User withdraws their userOwned ETH
+        uint256 balance_before = user.balance;
+        vm.startPrank(user);
+
+        vm.expectEmit(true, true, true, true);
+        emit UserWithdrawal(address(root), user, address(0), depositAmount);
+        
+        root.withdraw(address(0));
+        vm.stopPrank();
+
+        // 3. Check balances
+        uint256 balance_after = user.balance;
+        assertTrue(balance_after > balance_before, "User ETH balance should increase");
+
+        bytes32 custodyKey = _getCustodyKey(user, address(0));
+        (uint128 userOwned, ) = _splitAmount(root.custody(custodyKey));
+        assertEq(userOwned, 0, "userOwned balance should be zero after withdrawal");
     }
 
     // --- Power User Flow (VaultAccount Interaction) ---
@@ -244,11 +413,6 @@ contract VaultTest is Test {
 
 
     // --- Security & Edge Cases ---
-    function test_backendOperations_revert_whenFrozen() public {
-        // Owner freezes the contract.
-        // All functions with the onlyBackend modifier should revert.
-    }
-
     function test_userWithdraw_succeeds_whenFrozen() public {
         // Owner freezes the contract.
         // A standard user should still be able to withdraw their userOwned balance from VaultRoot.
@@ -578,24 +742,39 @@ contract VaultTest is Test {
     // }
 
     // --- Integration Tests ---
-    // function test_fullLifecycle_standardUser() public {
-    //     // Tests a complete lifecycle for a standard user:
-    //     // 1. Deposit
-    //     // 2. Credit confirmation
-    //     // 3. Partial withdrawal
-    //     // 4. Additional deposit
-    //     // 5. Full withdrawal
-    // }
+    function test_root_and_vaultAccount_emitDeposit_and_Withdraw_correctly() public {
+        // 1. Create a VaultAccount.
+        vm.startPrank(backend);
+        address accountAddress = root.createVaultAccount(anotherUser, bytes32(0));
+        vm.stopPrank();
+        VaultAccount vaultAccount = VaultAccount(payable(accountAddress));
 
-    // function test_fullLifecycle_powerUser() public {
-    //     // Tests a complete lifecycle for a power user with a VaultAccount:
-    //     // 1. VaultAccount creation
-    //     // 2. Deposit
-    //     // 3. Credit confirmation
-    //     // 4. Partial withdrawal
-    //     // 5. Additional deposit
-    //     // 6. Full withdrawal
-    // }
+        // 2. Deposit ETH into VaultAccount
+        uint256 depositAmount = 1 ether;
+        vm.startPrank(user);
+
+        // Expect DepositRecorded from VaultAccount
+        vm.expectEmit(true, true, true, true);
+        emit DepositRecorded(accountAddress, user, address(0), depositAmount);
+        
+        // Expect DepositRecorded from VaultRoot
+        vm.expectEmit(true, true, true, true);
+        emit DepositRecorded(accountAddress, user, address(0), depositAmount);
+
+        (bool success, ) = accountAddress.call{value: depositAmount}("");
+        require(success, "ETH deposit to account failed");
+
+        // 3. Withdraw ETH from VaultAccount
+        vm.expectEmit(true, true, true, true);
+        emit UserWithdrawal(accountAddress, user, address(0), depositAmount);
+
+        // The VaultAccount's withdraw() calls vaultRoot.recordWithdrawal()
+        vm.expectEmit(true, true, true, true);
+        emit WithdrawalProcessed(accountAddress, user, address(0), depositAmount, 0, "");
+
+        vaultAccount.withdraw(address(0));
+        vm.stopPrank();
+    }
 
     function test_vaultAccount_nftDeposit_updatesCustody() public {
         // 1. Create a VaultAccount for 'anotherUser'
@@ -693,8 +872,9 @@ contract VaultTest is Test {
         
         // And: user's escrow balance is unchanged.
         bytes32 userKey = _getCustodyKey(MSWhale, MILADYSTATION);
-        (, uint128 escrow) = _splitAmount(vaultAccount.custody(userKey));
-        assertEq(escrow, 1, "User escrow should be 1");
+        (uint128 userOwned, uint128 escrow) = _splitAmount(vaultAccount.custody(userKey));
+        assertEq(userOwned, 0, "User userOwned should be 0");
+        assertEq(escrow, 1, "User escrow should still be 1");
     }
 
     function test_vaultAccount_nftWithdraw_userOwned_returnsNFT() public {
@@ -766,8 +946,144 @@ contract VaultTest is Test {
         
         // And: user's escrow balance is unchanged.
         bytes32 userKey = _getCustodyKey(MSWhale, MILADYSTATION);
-        (, uint128 escrow) = _splitAmount(vaultAccount.custody(userKey));
-        assertEq(escrow, 1, "User escrow should be 1");
+        (uint128 userOwned, uint128 escrow) = _splitAmount(vaultAccount.custody(userKey));
+        assertEq(userOwned, 0);
+        assertEq(escrow, 1);
+    }
+
+    function test_userWithdraw_erc20_userOwned() public {
+        // 1. User deposits PEPE to create a userOwned balance
+        uint256 depositAmount = 1_000_000 * 1e18;
+        vm.startPrank(pepeWhale);
+        ERC20(PEPE).approve(address(root), depositAmount);
+        root.deposit(PEPE, depositAmount);
+        vm.stopPrank();
+
+        // 2. User withdraws their userOwned PEPE
+        uint256 balance_before = ERC20(PEPE).balanceOf(pepeWhale);
+        vm.startPrank(pepeWhale);
+
+        vm.expectEmit(true, true, true, true);
+        emit UserWithdrawal(address(root), pepeWhale, PEPE, depositAmount);
+        
+        root.withdraw(PEPE);
+        vm.stopPrank();
+
+        // 3. Check balances
+        uint256 balance_after = ERC20(PEPE).balanceOf(pepeWhale);
+        assertEq(balance_after, balance_before + depositAmount, "User PEPE balance should increase");
+
+        bytes32 custodyKey = _getCustodyKey(pepeWhale, PEPE);
+        (uint128 userOwned, ) = _splitAmount(root.custody(custodyKey));
+        assertEq(userOwned, 0, "userOwned balance should be zero after withdrawal");
+    }
+
+    function test_backendWithdrawTo_eth_sendsEscrow() public {
+        // 1. Setup user escrow balance
+        uint256 depositAmount = 5 ether;
+        vm.prank(user);
+        (bool success, ) = address(root).call{value: depositAmount}("");
+        require(success);
+
+        vm.prank(backend);
+        root.confirmCredit(address(root), user, address(0), depositAmount, 0, "confirm");
+        vm.stopPrank();
+
+        // 2. Backend withdraws funds to user with a fee
+        uint256 withdrawAmount = 2 ether;
+        uint128 fee = uint128(0.1 ether);
+        
+        uint256 user_balance_before = user.balance;
+
+        vm.startPrank(backend);
+        vm.expectEmit(true, true, true, true);
+        emit WithdrawalProcessed(address(root), user, address(0), withdrawAmount, fee, "withdraw");
+        
+        root.withdrawTo(user, address(0), withdrawAmount, fee, "withdraw");
+        vm.stopPrank();
+
+        // 3. Check balances
+        uint256 user_balance_after = user.balance;
+        assertEq(user_balance_after, user_balance_before + withdrawAmount, "User balance should increase by withdraw amount");
+        
+        // Check internal custody
+        bytes32 userKey = _getCustodyKey(user, address(0));
+        (, uint128 userEscrow) = _splitAmount(root.custody(userKey));
+        assertEq(userEscrow, depositAmount - withdrawAmount - fee, "User escrow should decrease by withdraw amount and fee");
+
+        bytes32 protocolKey = _getCustodyKey(address(root), address(0));
+        (, uint128 protocolEscrow) = _splitAmount(root.custody(protocolKey));
+        assertEq(protocolEscrow, fee, "Protocol escrow should equal the fee");
+    }
+
+    function test_globalUnlock_allowsEthEscrowWithdrawal() public {
+        // 1. Setup user escrow balance
+        uint256 depositAmount = 3 ether;
+        vm.prank(user);
+        (bool success, ) = address(root).call{value: depositAmount}("");
+        require(success);
+
+        vm.prank(backend);
+        root.confirmCredit(address(root), user, address(0), depositAmount, 0, "confirm");
+        vm.stopPrank();
+
+        // 2. Enable global refund mode
+        vm.prank(admin);
+        root.setRefund(true);
+        assertTrue(root.refund());
+
+        // 3. User withdraws their escrowed ETH
+        uint256 balance_before = user.balance;
+        vm.startPrank(user);
+
+        vm.expectEmit(true, true, true, true);
+        emit UserWithdrawal(address(root), user, address(0), depositAmount);
+        
+        root.withdraw(address(0));
+        vm.stopPrank();
+
+        // 4. Check balances
+        uint256 balance_after = user.balance;
+        assertTrue(balance_after > balance_before, "User ETH balance should increase");
+
+        bytes32 custodyKey = _getCustodyKey(user, address(0));
+        (, uint128 escrow) = _splitAmount(root.custody(custodyKey));
+        assertEq(escrow, 0, "escrow balance should be zero after withdrawal");
+    }
+
+    function test_globalUnlock_allowsErc20EscrowWithdrawal() public {
+        // 1. Setup user escrow balance
+        uint256 depositAmount = 1_000_000 * 1e18;
+        vm.startPrank(pepeWhale);
+        ERC20(PEPE).approve(address(root), depositAmount);
+        root.deposit(PEPE, depositAmount);
+        vm.stopPrank();
+
+        vm.prank(backend);
+        root.confirmCredit(address(root), pepeWhale, PEPE, depositAmount, 0, "confirm");
+        vm.stopPrank();
+
+        // 2. Enable global refund mode
+        vm.prank(admin);
+        root.setRefund(true);
+
+        // 3. User withdraws their escrowed PEPE
+        uint256 balance_before = ERC20(PEPE).balanceOf(pepeWhale);
+        vm.startPrank(pepeWhale);
+
+        vm.expectEmit(true, true, true, true);
+        emit UserWithdrawal(address(root), pepeWhale, PEPE, depositAmount);
+        
+        root.withdraw(PEPE);
+        vm.stopPrank();
+
+        // 4. Check balances
+        uint256 balance_after = ERC20(PEPE).balanceOf(pepeWhale);
+        assertEq(balance_after, balance_before + depositAmount, "User PEPE balance should increase");
+
+        bytes32 custodyKey = _getCustodyKey(pepeWhale, PEPE);
+        (, uint128 escrow) = _splitAmount(root.custody(custodyKey));
+        assertEq(escrow, 0, "escrow balance should be zero after withdrawal");
     }
 
 } 

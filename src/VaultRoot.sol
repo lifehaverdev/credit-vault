@@ -309,16 +309,22 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
                 } else {
                     SafeTransferLib.safeTransfer(token, msg.sender, escrow);
                 }
+                custody[key] = _packAmount(userOwned, 0); // zero out escrow
+                emit UserWithdrawal(address(this), msg.sender, token, escrow);
+            } else {
+                emit WithdrawalRequested(address(this),msg.sender,token);
             }
-            emit WithdrawalRequested(address(this),msg.sender,token);
         }
     }
 
     function withdrawTo(address user, address token, uint256 amount, uint128 fee, bytes calldata metadata) external onlyBackend nonReentrant {
         bytes32 key = _getCustodyKey(user, token);
-        (, uint128 escrow) = _splitAmount(custody[key]);
+        (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
         require(escrow >= amount + fee, "Insufficient escrow balance");
-        escrow -= uint128(amount);
+        
+        escrow -= (uint128(amount) + fee);
+        custody[key] = _packAmount(userOwned, escrow);
+
         if (fee > 0) {
             bytes32 accountKey = _getCustodyKey(address(this), token);
             (, uint128 protocolEscrow) = _splitAmount(custody[accountKey]);
