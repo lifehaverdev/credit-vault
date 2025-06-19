@@ -4,3 +4,6 @@
 [submodule "lib/solady"]
 	path = lib/solady
 	url = https://github.com/vectorized/solady
+[submodule "lib/createx-forge"]
+	path = lib/createx-forge
+	url = https://github.com/radeksvarz/createx-forge

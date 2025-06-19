@@ -32,9 +32,7 @@ import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {Initializable} from "solady/utils/Initializable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
-import {ERC20} from "solady/tokens/ERC20.sol";
 import {VaultAccount} from "./VaultAccount.sol";
-import "forge-std/console.sol";
 
 interface ICreate2Factory {
     function deploy(bytes calldata _initCode, bytes32 _salt) external returns (address);
@@ -64,9 +62,6 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
     mapping(address => bool) public isBackend;
     bool internal _backendAllowed = true;
     bool public refund = false;
-
-    // Gnosis Safe Singleton Factory
-    // ICreate2Factory private constant CREATE2_FACTORY = ICreate2Factory(0x0000000000006396FF2a80c067f99B3d2Ab4Df24);
 
     /*
        ______
