@@ -9,6 +9,7 @@ import {VaultAccount} from "../src/VaultAccount.sol";
 import {ERC1967Factory} from "solady/utils/ERC1967Factory.sol";
 import {ERC20} from "solady/tokens/ERC20.sol";
 import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
+import {IVaultRoot} from "../src/interfaces/IVaultRoot.sol";
 
 interface IERC721 {
     function safeTransferFrom(address from, address to, uint256 tokenId) external;
@@ -133,11 +134,11 @@ contract VaultMetaTest is Test {
         VaultRootV2 v2Proxy = VaultRootV2(payable(proxyAddress));
 
         vm.prank(user);
-        vm.expectRevert("Not backend");
+        vm.expectRevert(IVaultRoot.NotBackend.selector);
         v2Proxy.createVaultAccount(user, "salt");
 
         vm.prank(user);
-        vm.expectRevert("Not the owner of the token");
+        vm.expectRevert(IVaultRoot.NotOwner.selector);
         v2Proxy.setFreeze(false);
 
         uint256 depositAmount = 1 ether;
@@ -302,4 +303,12 @@ contract VaultMetaTest is Test {
         uint256 gasUsed_erc20_backend_withdraw = gasStart_erc20_backend_withdraw - gasleft();
         console.log("Backend withdrawTo ERC20:", gasUsed_erc20_backend_withdraw);
     }
+
+    /*
+    test_canInitializeAndSetBackend()	✔ Initialization & state
+    test_initializeIsProtected()	✔ Cannot re-init
+    test_canUpgradeAndCallNewLogic()	✔ Upgrade path works
+    test_onlyAdminCanUpgrade()	✔ Admin-only enforcement
+    test_upgradeToInvalidImplementationFails()	✔ UUPS compliance check
+    */
 } 

@@ -99,7 +99,7 @@ contract VaultTest is Test {
     // --- Test Scaffolding ---
 
     // --- Admin & Setup ---
-    function test_initialState() public {
+    function test_initialState() public view {
         // Tests that the root contract is initialized with the correct owner and that the initial backend is set.
         assertEq(IERC721(MILADYSTATION).ownerOf(MS_TOKEN_ID), admin, "Admin should be the owner of the NFT");
         assertTrue(root.isBackend(backend), "Initial backend should be set");
@@ -123,7 +123,7 @@ contract VaultTest is Test {
 
     function test_onlyOwnerFunctions_revertForEOA() public {
         vm.startPrank(user);
-        vm.expectRevert("Not the owner of the token");
+        vm.expectRevert(IVaultRoot.NotOwner.selector);
         root.setBackend(anotherUser, true);
         vm.stopPrank();
     }
@@ -146,7 +146,7 @@ contract VaultTest is Test {
 
     function test_setFreeze_byNonOwner_reverts() public {
         vm.startPrank(user);
-        vm.expectRevert("Not the owner of the token");
+        vm.expectRevert(IVaultRoot.NotOwner.selector);
         root.setFreeze(false);
         vm.stopPrank();
     }
@@ -204,7 +204,7 @@ contract VaultTest is Test {
 
     function test_root_depositFor_byNonBackend_reverts() public {
         vm.startPrank(user);
-        vm.expectRevert("Not backend");
+        vm.expectRevert(IVaultRoot.NotBackend.selector);
         root.depositFor(anotherUser, PEPE, 1_000_000 * 1e18);
         vm.stopPrank();
     }
@@ -301,7 +301,7 @@ contract VaultTest is Test {
         vm.startPrank(backend);
         uint256 amountToBless = protocolAmount + 1;
         
-        vm.expectRevert("Not enough in protocol escrow");
+        vm.expectRevert(IVaultRoot.NotEnoughInProtocolEscrow.selector);
         root.blessEscrow(user, PEPE, amountToBless);
         vm.stopPrank();
 
@@ -410,7 +410,7 @@ contract VaultTest is Test {
         uint128 fee = 0;
 
         vm.startPrank(backend);
-        vm.expectRevert("Insufficient escrow balance");
+        vm.expectRevert(IVaultRoot.InsufficientEscrowBalance.selector);
         root.withdrawTo(pepeWhale, PEPE, withdrawAmount, fee, "withdraw");
         vm.stopPrank();
 
@@ -629,7 +629,7 @@ contract VaultTest is Test {
 
     function test_onlyVaultAccount_modifier() public {
         vm.startPrank(user);
-        vm.expectRevert("Not vault account");
+        vm.expectRevert(IVaultRoot.NotVaultAccount.selector);
         root.recordDeposit(user, PEPE, 1 ether);
     }
 

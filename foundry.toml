@@ -3,9 +3,17 @@ src = "src"
 out = "out"
 libs = ["lib"]
 rpc_endpoints = { mainnet = "${RPC_URL}" }
+solc_version = "0.8.30"
+evm_version = "paris" # Cancun will be tested in the CI.
+auto_detect_solc = false
+optimizer = true
+optimizer_runs = 1_000
+gas_limit = 100_000_000 # ETH is 30M, but we use a higher value.
+skip = ["*/*7702*", "*/*Transient*", "*/ext/ithaca/*", "*/ext/zksync/*"]
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
 
 [invariant]
 runs = 1
 depth = 1
 fail_on_revert = false
+

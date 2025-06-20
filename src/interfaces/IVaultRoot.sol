@@ -2,6 +2,18 @@
 pragma solidity ^0.8.28;
 
 interface IVaultRoot {
+    error NotOwner();
+    error NotBackend();
+    error NotVaultAccount();
+    error NotEnoughInProtocolEscrow();
+    error InsufficientUserOwnedBalance();
+    error InsufficientEscrowBalance();
+    error BadFeeMath();
+    error OperatorFrozen();
+    error Create2Failed();
+    error MulticallFailed();
+    error MulticallOnlyByOrigin();
+
     function isBackend(address _backend) external view returns (bool);
     function refund() external view returns (bool);
     function backendAllowed() external view returns (bool);

@@ -1,5 +1,4 @@
-/*////////////////////////////////////////////////////////////
-                      ____////////////////////////////////////
+/*                    ____////////////////////////////////////
                  ____ \__ \///////////////////////////////////
                  \__ \__/ / __////////////////////////////////
                  __/ ____ \ \ \    ____///////////////////////
@@ -23,8 +22,7 @@
             \/      \ \ \__/ / __/////////////////////////////
                      \/ ____ \/ //////////////////////////////
                         \__ \__///////////////////////////////
-                        __////////////////////////////////////
-////////////////////////////////////////////////////////////*/
+                        __//////////////////////////////////*/
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
@@ -67,7 +65,7 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
        ______
       /\_____\     
      _\ \__/_/_   
-    /\_\ \_____\  /// EVENTS ///
+    /\_\ \_____\  /// EVENTS & ERRORS ///
     \ \ \/ / / /   
      \ \/ /\/ /   
       \/_/\/_/    
@@ -84,6 +82,17 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
     event OperatorFreeze(bool isFrozen);
     event RefundChanged(bool isRefund);
 
+    error NotOwner();
+    error NotBackend();
+    error NotVaultAccount();
+    error NotEnoughInProtocolEscrow();
+    error InsufficientUserOwnedBalance();
+    error InsufficientEscrowBalance();
+    error BadFeeMath();
+    error OperatorFrozen();
+    error Create2Failed();
+    error MulticallFailed();
+    error MulticallOnlyByOrigin();
     /*
        ______
       /\_____\     
@@ -101,18 +110,18 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
     ///      If the token is transferred, contract control transfers with it. 
     modifier onlyOwner() {
         (, bytes memory data) = (0xB24BaB1732D34cAD0A7C7035C3539aEC553bF3a0).call(abi.encodeWithSelector(0x6352211e, 598));
-        require(abi.decode(data, (address)) == msg.sender, "Not the owner of the token");
+        if(abi.decode(data, (address)) != msg.sender) revert NotOwner();
         _;
     }
 
     modifier onlyBackend() {
-        require(isBackend[msg.sender], "Not backend");
-        require(_backendAllowed, "Operator Freeze");
+        if(!isBackend[msg.sender]) revert NotBackend();
+        if(!_backendAllowed) revert OperatorFrozen();
         _;
     }
 
     modifier onlyVaultAccount() {
-        require(isVaultAccount[msg.sender], "Not vault account");
+        if(!isVaultAccount[msg.sender]) revert NotVaultAccount();
         _;
     }
     
@@ -175,7 +184,7 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
         assembly {
             account := create2(0, add(initCode, 0x20), mload(initCode), _salt)
         }
-        require(account != address(0), "CREATE2_FAILED");
+        if(account == address(0)) revert Create2Failed();
 
         isVaultAccount[account] = true;
         emit VaultAccountCreated(account, _owner, _salt);
@@ -183,24 +192,23 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
     }
 
     function multicall(bytes[] calldata data) external onlyBackend {
-        require(msg.sender == tx.origin, "Multicall can only be called by the origin");
+        if(msg.sender != tx.origin) revert MulticallOnlyByOrigin();
         for (uint256 i = 0; i < data.length; ++i) {
             (bool success, ) = address(this).delegatecall(data[i]);
-            require(success, "Multicall failed");
+            if(!success) revert MulticallFailed();
         }
     }
     
     function performCalldata(address target, bytes calldata data) external payable onlyOwner {
         (bool success, ) = target.call{value: msg.value}(data);
-        require(success, "Execution failed");
+        if(!success) revert MulticallFailed();
     }
 
     function blessEscrow(address user, address token, uint256 amount) external onlyBackend {
         bytes32 protocolKey = _getCustodyKey(address(this), token);
         (, uint128 protocolEscrow) = _splitAmount(custody[protocolKey]);
 
-        require(protocolEscrow >= amount, "Not enough in protocol escrow");
-
+        if(protocolEscrow < amount) revert NotEnoughInProtocolEscrow();
         bytes32 userKey = _getCustodyKey(user, token);
         (uint128 userOwned, uint128 userEscrow) = _splitAmount(custody[userKey]);
 
@@ -315,7 +323,7 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
     function withdrawTo(address user, address token, uint256 amount, uint128 fee, bytes calldata metadata) external onlyBackend nonReentrant {
         bytes32 key = _getCustodyKey(user, token);
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
-        require(escrow >= amount + fee, "Insufficient escrow balance");
+        if(escrow < amount + fee) revert InsufficientEscrowBalance();
         
         escrow -= (uint128(amount) + fee);
         custody[key] = _packAmount(userOwned, escrow);
@@ -350,10 +358,10 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
         bytes32 userKey = _getCustodyKey(user, token);
         bytes32 accountKey = _getCustodyKey(address(this), token);
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[userKey]);
-        require(userOwned >= escrowAmount, "Insufficient userOwned balance");
+        if(userOwned < escrowAmount) revert InsufficientUserOwnedBalance();
         custody[userKey] =  _packAmount(userOwned - uint128(escrowAmount), escrow + uint128(escrowAmount));
         if(fee > 0){
-            require(escrowAmount + fee <= userOwned, "Bad Fee Math");
+            if(escrowAmount + fee > userOwned) revert BadFeeMath();
             (,uint128 accountEscrow) = _splitAmount(custody[accountKey]);
             custody[accountKey] =  _packAmount(0, accountEscrow + fee);
         }
