@@ -93,6 +93,7 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
     error Create2Failed();
     error MulticallFailed();
     error MulticallOnlyByOrigin();
+    error InvalidVaultAccountPrefix();
     /*
        ______
       /\_____\     
@@ -107,9 +108,10 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
     /// @notice Restricts function access to the current owner of token MiladyStation NFT ID 598.
     /// @dev This enforces ownership via an ERC721 `ownerOf(uint256)` call, rather than OpenZeppelin's Ownable pattern.
     ///      The NFT address is hardcoded as 0xB24BaB1732D34cAD0A7C7035C3539aEC553bF3a0.
+    /// TEST TEST since we are on sepolia, lets use: 0x73eB323474B0597d3E20fBC4084D0E93f133a1ED
     ///      If the token is transferred, contract control transfers with it. 
     modifier onlyOwner() {
-        (, bytes memory data) = (0xB24BaB1732D34cAD0A7C7035C3539aEC553bF3a0).call(abi.encodeWithSelector(0x6352211e, 598));
+        (, bytes memory data) = (0x73eB323474B0597d3E20fBC4084D0E93f133a1ED).call(abi.encodeWithSelector(0x6352211e, 46));
         if(abi.decode(data, (address)) != msg.sender) revert NotOwner();
         _;
     }
@@ -185,6 +187,9 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
             account := create2(0, add(initCode, 0x20), mload(initCode), _salt)
         }
         if(account == address(0)) revert Create2Failed();
+
+        // Check if the created account address starts with 0x1152
+        if ((uint160(account) >> 144) != 0x1152) revert InvalidVaultAccountPrefix();
 
         isVaultAccount[account] = true;
         emit VaultAccountCreated(account, _owner, _salt);

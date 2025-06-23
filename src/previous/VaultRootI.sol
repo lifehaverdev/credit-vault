@@ -34,7 +34,7 @@ import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {Initializable} from "solady/utils/Initializable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
-import {VaultAccount} from "./VaultAccount.sol";
+import {VaultAccount} from "../VaultAccount.sol";
 
 interface ICreate2Factory {
     function deploy(bytes calldata _initCode, bytes32 _salt) external returns (address);

@@ -16,7 +16,7 @@ contract DeployVaultRoot is Script, Test {
         address factory = 0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed;
 
         // The salt you successfully mined in the previous step.
-        bytes32 salt = bytes32(uint256(21245));
+        bytes32 salt = bytes32(uint256(29608));
         
         // Get the creation code for your contract and its hash.
         bytes memory bytecode = type(VaultRoot).creationCode;
