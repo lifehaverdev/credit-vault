@@ -1,8 +1,4 @@
-/*
-deployed to 0x115207b091ea8ec2919c7f1368c6e1e5d1cc7207 on sepolia 
-with hardcoded mainnet miladystation nft ownership lol
-
-                    ____////////////////////////////////////
+/*                    ____////////////////////////////////////
                  ____ \__ \///////////////////////////////////
                  \__ \__/ / __////////////////////////////////
                  __/ ____ \ \ \    ____///////////////////////
@@ -34,61 +30,64 @@ import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {Initializable} from "solady/utils/Initializable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
-import {VaultAccount} from "../VaultAccount.sol";
+import {CharteredFund} from "./CharteredFund.sol";
 
 interface ICreate2Factory {
     function deploy(bytes calldata _initCode, bytes32 _salt) external returns (address);
 }
 
-contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
+contract Foundation is UUPSUpgradeable, Initializable, ReentrancyGuard {
 
     /*
-         /\       \
-        /  \       \
-       /    \       \
-      /      \_______\ 
-      \      /       /
-    ___\    /   ____/___
-   /\   \  /   /\       \
-  /  \   \/___/  \       \  /// STATE VARIABLES ///
- /    \       \   \       \
-/      \_______\   \_______\
-\      /       /   /       /
- \    /       /   /       /
-  \  /       /\  /       /
-   \/_______/  \/_______/ 
+         /\\       \\
+        /  \\       \\
+       /    \\       \\
+      /      \\_______\\ 
+      \\      /       /
+    ___\\    /   ____/___
+   /\\   \\  /   /\\       \\
+  /  \\   \\/___/  \\       \\  /// STATE VARIABLES ///
+ /    \\       \\   \\       \\
+/      \\_______\\   \\_______\\
+\\      /       /   /       /
+ \\    /       /   /       /
+  \\  /       /\\  /       /
+   \\/_______/  \\/_______/ 
     */
 
-    mapping(bytes32 => bytes32) public custody; // vaultAccount => keccak256(user,token) => balance
-    mapping(address => bool) public isVaultAccount;
+    mapping(bytes32 => bytes32) public custody; // keccak256(user,token) => keccak256(userOwned, escrow)
+    mapping(address => bool) public isCharteredFund;
     mapping(address => bool) public isBackend;
     bool internal _backendAllowed = true;
     bool public refund = false;
+    address public ownerNFT;
+    uint256 public ownerTokenId;
 
     /*
        ______
-      /\_____\     
-     _\ \__/_/_   
-    /\_\ \_____\  /// EVENTS & ERRORS ///
-    \ \ \/ / / /   
-     \ \/ /\/ /   
-      \/_/\/_/    
+      /\\_____\\     
+     _\\ \\__/_/_   
+    /\\_\\ \\_____\\  /// EVENTS & ERRORS ///
+    \\ \\ \\/ / / /   
+     \\ \\/ /\\/ /   
+      \\/_/\\/_/    
 
     */
-    event VaultAccountCreated(address indexed accountAddress, address indexed owner, bytes32 salt);
-    event DepositRecorded(address indexed vaultAccount, address indexed user, address indexed token, uint256 amount);
-    event CreditConfirmed(address indexed vaultAccount, address indexed user, address indexed token, uint256 amount, uint128 fee, bytes metadata);
-    event WithdrawalProcessed(address indexed vaultAccount, address indexed user, address indexed token, uint256 amount, uint128 fee, bytes metadata);
-    event WithdrawalRequested(address indexed vaultAccount, address indexed user, address indexed token);
-    event UserWithdrawal(address indexed vaultAccount, address indexed user, address indexed token, uint256 amount);
+    event FundChartered(address indexed fundAddress, address indexed owner, bytes32 salt);
+    event ContributionRecorded(address indexed fundAddress, address indexed user, address indexed token, uint256 amount);
+    event CommitmentConfirmed(address indexed fundAddress, address indexed user, address indexed token, uint256 amount, uint128 fee, bytes metadata);
+    event RemittanceProcessed(address indexed fundAddress, address indexed user, address indexed token, uint256 amount, uint128 fee, bytes metadata);
+    event RescissionRequested(address indexed fundAddress, address indexed user, address indexed token);
+    event ContributionRescinded(address indexed fundAddress, address indexed user, address indexed token, uint256 amount);
     event BackendStatusChanged(address indexed backend, bool isAuthorized);
-    event Liquidation(address indexed vaultAccount, address indexed user, address indexed token, uint256 fee, bytes metadata);
+    event Liquidation(address indexed fundAddress, address indexed user, address indexed token, uint256 fee, bytes metadata);
     event OperatorFreeze(bool isFrozen);
     event RefundChanged(bool isRefund);
+    event Donation(address indexed funder, address indexed token, uint256 amount, bool isNFT, bytes32 metadata);
 
     error NotOwner();
     error NotBackend();
-    error NotVaultAccount();
+    error NotCharteredFund();
     error NotEnoughInProtocolEscrow();
     error InsufficientUserOwnedBalance();
     error InsufficientEscrowBalance();
@@ -97,14 +96,15 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
     error Create2Failed();
     error MulticallFailed();
     error MulticallOnlyByOrigin();
+    error InvalidFundAddressPrefix();
     /*
        ______
-      /\_____\     
-     _\ \__/_/_   
-    /\_\ \_____\  /// MODIFIERS ///
-    \ \ \/ / / /   
-     \ \/ /\/ /   
-      \/_/\/_/    
+      /\\_____\\     
+     _\\ \\__/_/_   
+    /\\_\\ \\_____\\  /// MODIFIERS ///
+    \\ \\ \\/ / / /   
+     \\ \\/ /\\/ /   
+      \\/_/\\/_/    
 
     */
 
@@ -113,7 +113,7 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
     ///      The NFT address is hardcoded as 0xB24BaB1732D34cAD0A7C7035C3539aEC553bF3a0.
     ///      If the token is transferred, contract control transfers with it. 
     modifier onlyOwner() {
-        (, bytes memory data) = (0xB24BaB1732D34cAD0A7C7035C3539aEC553bF3a0).call(abi.encodeWithSelector(0x6352211e, 598));
+        (, bytes memory data) = ownerNFT.call(abi.encodeWithSelector(0x6352211e, ownerTokenId));
         if(abi.decode(data, (address)) != msg.sender) revert NotOwner();
         _;
     }
@@ -124,17 +124,17 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
         _;
     }
 
-    modifier onlyVaultAccount() {
-        if(!isVaultAccount[msg.sender]) revert NotVaultAccount();
+    modifier onlyCharteredFund() {
+        if(!isCharteredFund[msg.sender]) revert NotCharteredFund();
         _;
     }
     
     /*
       ____
-     /\___\  /// HELPER FUNCTIONS ///
-    /\ \___\
-    \ \/ / /
-     \/_/_/ 
+     /\\___\\  /// HELPER FUNCTIONS ///
+    /\\ \\___\\
+    \\ \\/ / /
+     \\/_/_/ 
 
     */
     function _getCustodyKey(address user, address token) internal pure returns (bytes32) {
@@ -155,12 +155,12 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
 
     /*
        ______
-      /\_____\     
-     _\ \__/_/_   
-    /\_\ \_____\  /// OWNER & OPERATOR MANAGEMENT ///
-    \ \ \/ / / /   
-     \ \/ /\/ /   
-      \/_/\/_/    
+      /\\_____\\     
+     _\\ \\__/_/_   
+    /\\_\\ \\_____\\  /// OWNER & OPERATOR MANAGEMENT ///
+    \\ \\ \\/ / / /   
+     \\ \\/ /\\/ /   
+      \\/_/\\/_/    
 
     */
 
@@ -179,20 +179,39 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
         emit RefundChanged(_refund);
     }
 
-    function createVaultAccount(address _owner, bytes32 _salt) external onlyBackend returns (address) {
-        bytes memory bytecode = type(VaultAccount).creationCode;
+    /**
+    * @notice Computes the expected address for a new chartered fund without deploying it.
+    * @param _owner The address that will own the new fund.
+    * @param _salt The 32-byte salt for the CREATE2 operation.
+    * @return The computed address of the new chartered fund.
+    */
+    function computeCharterAddress(address _owner, bytes32 _salt) external view returns (address) {
+        bytes memory bytecode = type(CharteredFund).creationCode;
+        bytes memory constructorArgs = abi.encode(address(this), _owner);
+        bytes32 initCodeHash = keccak256(abi.encodePacked(bytecode, constructorArgs));
+        
+        return address(uint160(uint256(keccak256(abi.encodePacked(
+            bytes1(0xff),
+            address(this),
+            _salt,
+            initCodeHash
+        )))));
+    }
+
+    function charterFund(address _owner, bytes32 _salt) external onlyBackend returns (address) {
+        bytes memory bytecode = type(CharteredFund).creationCode;
         bytes memory constructorArgs = abi.encode(address(this), _owner);
         bytes memory initCode = abi.encodePacked(bytecode, constructorArgs);
         
-        address account;
+        address fund;
         assembly {
-            account := create2(0, add(initCode, 0x20), mload(initCode), _salt)
+            fund := create2(0, add(initCode, 0x20), mload(initCode), _salt)
         }
-        if(account == address(0)) revert Create2Failed();
+        if(fund == address(0)) revert Create2Failed();
 
-        isVaultAccount[account] = true;
-        emit VaultAccountCreated(account, _owner, _salt);
-        return account;
+        isCharteredFund[fund] = true;
+        emit FundChartered(fund, _owner, _salt);
+        return fund;
     }
 
     function multicall(bytes[] calldata data) external onlyBackend {
@@ -208,7 +227,7 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
         if(!success) revert MulticallFailed();
     }
 
-    function blessEscrow(address user, address token, uint256 amount) external onlyBackend {
+    function allocate(address user, address token, uint256 amount) external onlyBackend {
         bytes32 protocolKey = _getCustodyKey(address(this), token);
         (, uint128 protocolEscrow) = _splitAmount(custody[protocolKey]);
 
@@ -223,17 +242,17 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
         // Add to user escrow
         custody[userKey] = _packAmount(userOwned, userEscrow + uint128(amount));
 
-        emit CreditConfirmed(address(this), user, token, amount, 0, "BLESSED");
+        emit CommitmentConfirmed(address(this), user, token, amount, 0, "ALLOCATED");
     }
 
     /*
        ______
-      /\_____\     
-     _\ \__/_/_   
-    /\_\ \_____\  /// DEPOSITS ///
-    \ \ \/ / / /   
-     \ \/ /\/ /   
-      \/_/\/_/    
+      /\\_____\\     
+     _\\ \\__/_/_   
+    /\\_\\ \\_____\\  /// CONTRIBUTIONS ///
+    \\ \\ \\/ / / /   
+     \\ \\/ /\\/ /   
+      \\/_/\\/_/    
 
     */
 
@@ -241,7 +260,7 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
         bytes32 key = _getCustodyKey(msg.sender, address(0));
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
         custody[key] = _packAmount(userOwned + uint128(msg.value), escrow);
-        emit DepositRecorded(address(this), msg.sender, address(0), msg.value);
+        emit ContributionRecorded(address(this), msg.sender, address(0), msg.value);
     }
 
     /// @notice Handles ERC721 token transfers into the vault
@@ -259,43 +278,43 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
         // We increment the user's count of NFTs from this contract
         custody[key] = _packAmount(userOwned + 1, escrow);
 
-        emit DepositRecorded(address(this), from, msg.sender, 1); // tokenId is not stored here, just count
+        emit ContributionRecorded(address(this), from, msg.sender, 1); // tokenId is not stored here, just count
         return 0x150b7a02; // IERC721Receiver.onERC721Received.selector
     }
 
-    function deposit(address token, uint256 amount) external nonReentrant {
+    function contribute(address token, uint256 amount) external nonReentrant {
         bytes32 key = _getCustodyKey(msg.sender, token);
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
         SafeTransferLib.safeTransferFrom(token, msg.sender, address(this), amount);
         custody[key] = _packAmount(userOwned + uint128(amount), escrow);
-        emit DepositRecorded(address(this), msg.sender, token, amount);
+        emit ContributionRecorded(address(this), msg.sender, token, amount);
     }
 
-    function depositFor(address user, address token, uint256 amount) external onlyBackend nonReentrant {
+    function contributeFor(address user, address token, uint256 amount) external onlyBackend nonReentrant {
         bytes32 key = _getCustodyKey(user, token);
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
         // The backend (msg.sender) must have an allowance to move the token
         SafeTransferLib.safeTransferFrom(token, msg.sender, address(this), amount);
         custody[key] = _packAmount(userOwned + uint128(amount), escrow);
-        emit DepositRecorded(address(this), user, token, amount);
+        emit ContributionRecorded(address(this), user, token, amount);
     }
 
-    function recordDeposit(address user, address token, uint256 amount) external payable onlyVaultAccount nonReentrant {
-        emit DepositRecorded(msg.sender, user, token, amount);
+    function recordContribution(address user, address token, uint256 amount) external payable onlyCharteredFund nonReentrant {
+        emit ContributionRecorded(msg.sender, user, token, amount);
     }
 
     /*
        ______
-      /\_____\     
-     _\ \__/_/_   
-    /\_\ \_____\  /// WITHDRAWALS ///
-    \ \ \/ / / /   
-     \ \/ /\/ /   
-      \/_/\/_/    
+      /\\_____\\     
+     _\\ \\__/_/_   
+    /\\_\\ \\_____\\  /// REMITTANCES & RESCISSIONS ///
+    \\ \\ \\/ / / /   
+     \\ \\/ /\\/ /   
+      \\/_/\\/_/    
 
     */
 
-    function withdraw(address token) external nonReentrant {
+    function requestRescission(address token) external nonReentrant {
         // Here msg.sender is the user
         bytes32 key = _getCustodyKey(msg.sender, token);
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
@@ -308,7 +327,7 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
                 SafeTransferLib.safeTransfer(token, msg.sender, userOwned);
             }
             custody[key] =  _packAmount(0, escrow);
-            emit UserWithdrawal(address(this),msg.sender, token, userOwned);
+            emit ContributionRescinded(address(this),msg.sender, token, userOwned);
         }else{
             if(refund){
                 if (token == address(0)) {
@@ -317,14 +336,14 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
                     SafeTransferLib.safeTransfer(token, msg.sender, escrow);
                 }
                 custody[key] = _packAmount(userOwned, 0); // zero out escrow
-                emit UserWithdrawal(address(this), msg.sender, token, escrow);
+                emit ContributionRescinded(address(this), msg.sender, token, escrow);
             } else {
-                emit WithdrawalRequested(address(this),msg.sender,token);
+                emit RescissionRequested(address(this),msg.sender,token);
             }
         }
     }
 
-    function withdrawTo(address user, address token, uint256 amount, uint128 fee, bytes calldata metadata) external onlyBackend nonReentrant {
+    function remit(address user, address token, uint256 amount, uint128 fee, bytes calldata metadata) external onlyBackend nonReentrant {
         bytes32 key = _getCustodyKey(user, token);
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
         if(escrow < amount + fee) revert InsufficientEscrowBalance();
@@ -347,18 +366,22 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
                 SafeTransferLib.safeTransfer(token, user, amount);
             }
         }
-        emit WithdrawalProcessed(address(this), user, token, amount, fee, metadata);
+        emit RemittanceProcessed(address(this), user, token, amount, fee, metadata);
     }
 
-    function recordWithdrawalRequest(address user, address token) external onlyVaultAccount nonReentrant {
-        emit WithdrawalRequested(msg.sender, user, token);
+    function recordRescissionRequest(address user, address token) external onlyCharteredFund nonReentrant {
+        emit RescissionRequested(msg.sender, user, token);
     }
 
-    function recordWithdrawal(address user, address token, uint256 amount, uint128 fee, bytes calldata metadata) external onlyVaultAccount nonReentrant {
-        emit WithdrawalProcessed(msg.sender, user, token, amount, fee, metadata);
+    function recordRemittance(address user, address token, uint256 amount, uint128 fee, bytes calldata metadata) external onlyCharteredFund nonReentrant {
+        emit RemittanceProcessed(msg.sender, user, token, amount, fee, metadata);
     }
 
-    function confirmCredit(address vaultAccount, address user, address token, uint256 escrowAmount, uint128 fee, bytes calldata metadata) external onlyBackend nonReentrant {
+    function recordCommitment(address fundAddress, address user, address token, uint256 escrowAmount, uint128 fee, bytes calldata metadata) external onlyCharteredFund nonReentrant {
+        emit CommitmentConfirmed(fundAddress, user, token, escrowAmount, fee, metadata);
+    }
+
+    function commit(address fundAddress, address user, address token, uint256 escrowAmount, uint128 fee, bytes calldata metadata) external onlyBackend nonReentrant {
         bytes32 userKey = _getCustodyKey(user, token);
         bytes32 accountKey = _getCustodyKey(address(this), token);
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[userKey]);
@@ -369,25 +392,55 @@ contract VaultRoot is UUPSUpgradeable, Initializable, ReentrancyGuard {
             (,uint128 accountEscrow) = _splitAmount(custody[accountKey]);
             custody[accountKey] =  _packAmount(0, accountEscrow + fee);
         }
-        emit CreditConfirmed(vaultAccount, user, token, escrowAmount, fee, metadata);
+        emit CommitmentConfirmed(fundAddress, user, token, escrowAmount, fee, metadata);
+    }
+
+    function donate(address token, uint256 amount, bytes32 metadata, bool isNFT) external payable nonReentrant {
+        if (token == address(0)) {
+            require(msg.value == amount, "ETH value mismatch");
+            bytes32 key = _getCustodyKey(address(this), address(0));
+            (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
+            custody[key] = _packAmount(userOwned + uint128(amount), escrow);
+        } else if (isNFT) {
+            // ERC721 transferFrom(tx.origin, address(this), amount) where amount is tokenId
+            (bool success, bytes memory data) = token.call(abi.encodeWithSelector(0x23b872dd, tx.origin, address(this), amount));
+            require(success && (data.length == 0 || abi.decode(data, (bool))), "NFT transfer failed");
+            bytes32 key = _getCustodyKey(address(this), token);
+            (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
+            custody[key] = _packAmount(userOwned + 1, escrow);
+        } else {
+            // ERC20
+            SafeTransferLib.safeTransferFrom(token, msg.sender, address(this), amount);
+            bytes32 key = _getCustodyKey(address(this), token);
+            (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
+            custody[key] = _packAmount(userOwned + uint128(amount), escrow);
+        }
+        emit Donation(msg.sender, token, amount, isNFT, metadata);
+    }
+
+    function recordDonation(address funder, address token, uint256 amount, bool isNFT, bytes32 metadata) external onlyCharteredFund nonReentrant {
+        emit Donation(funder, token, amount, isNFT, metadata);
     }
 
     /*
 
     ________
-   /_______/\
-   \ \    / /
- ___\ \__/_/___     /// UPGRADEABILITY ///
-/____\ \______/\
-\ \   \/ /   / /
- \ \  / /\  / /
-  \ \/ /\ \/ /
-   \_\/  \_\/
+   /_______/\\
+   \\ \\    / /
+ ___\\ \\__/_/___     /// UPGRADEABILITY ///
+/____\\ \\______/\\
+\\ \\   \\/ /   / /
+ \\ \\  / /\\  / /
+  \\ \\/ /\\ \\/ /
+   \\_\\/  \\_\\/
 
    
     */
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
     /// Initialization ///
-    function initialize() external initializer {}
+    function initialize(address _ownerNFT, uint256 _ownerTokenId) external initializer {
+        ownerNFT = _ownerNFT;
+        ownerTokenId = _ownerTokenId;
+    }
 } 

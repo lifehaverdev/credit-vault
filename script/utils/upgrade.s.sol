@@ -7,9 +7,9 @@ import "forge-std/console.sol";
 // Factory address (same as deployment)
 address constant FACTORY = 0x0000000000006396FF2a80c067f99B3d2Ab4Df24;
 // The proxy we want to upgrade
-address payable constant PROXY = payable(0x011528b1d5822B3269d919e38872cC33bdec6d17);
+address payable constant FOUNDATION_PROXY = payable(0x011528b1d5822B3269d919e38872cC33bdec6d17);
 // The new implementation contract
-address payable constant NEW_IMPLEMENTATION = payable(0x115255EE8bD792f659944f37D641254d9bf05d3C);
+address payable constant NEW_FOUNDATION_IMPLEMENTATION = payable(0x115230E319CCD1c760D89a8a4059ac4883240526);
 
 interface IERC1967Factory {
     function upgradeAndCall(
@@ -27,12 +27,12 @@ contract UpgradeProxy is Script {
         bytes memory initCalldata = "";
 
         IERC1967Factory(FACTORY).upgradeAndCall(
-            PROXY,
-            NEW_IMPLEMENTATION,
+            FOUNDATION_PROXY,
+            NEW_FOUNDATION_IMPLEMENTATION,
             initCalldata
         );
 
-        console.log("Proxy at", PROXY, "upgraded to new implementation at", NEW_IMPLEMENTATION);
+        console.log("Proxy at", FOUNDATION_PROXY, "upgraded to new implementation at", NEW_FOUNDATION_IMPLEMENTATION);
 
         vm.stopBroadcast();
     }

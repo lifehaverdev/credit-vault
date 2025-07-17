@@ -1,31 +1,30 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity ^0.8.20;
 
-import {IVaultRoot} from "../../src/interfaces/IVaultRoot.sol";
+import {Test} from "forge-std/Test.sol";
+import {IFoundation} from "../../src/interfaces/IFoundation.sol";
 
-contract ReentrancyAttacker {
-    IVaultRoot public root;
+contract ReentrancyAttacker is Test {
+    IFoundation public root;
+    address owner;
 
     constructor(address _root) {
-        root = IVaultRoot(_root);
+        root = IFoundation(_root);
+        owner = msg.sender;
     }
 
-    // Function to deposit ETH into the vault
-    function deposit() external payable {
-        // Forward ETH to the root contract's receive() function
+    function deposit() public payable {
         (bool success, ) = address(root).call{value: msg.value}("");
         require(success, "Deposit failed");
     }
 
-    // Function to start the withdrawal
-    function attack() external {
-        root.withdraw(address(0));
+    function attack() public payable {
+        root.requestRescission(address(0));
     }
 
-    // Malicious receive function to re-enter the withdraw function
     receive() external payable {
-        // Unconditionally try to re-enter the withdraw function.
-        // The ReentrancyGuard in VaultRoot should prevent this second call.
-        root.withdraw(address(0));
+        if (address(root).balance >= 0) {
+            root.requestRescission(address(0));
+        }
     }
 } 

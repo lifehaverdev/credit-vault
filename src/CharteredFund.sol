@@ -4,39 +4,40 @@ pragma solidity ^0.8.28;
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
-import {IVaultRoot} from "./interfaces/IVaultRoot.sol";
+import {IFoundation} from "./interfaces/IFoundation.sol";
 
-contract VaultAccount is Ownable, ReentrancyGuard {
+contract CharteredFund is Ownable, ReentrancyGuard {
 
     // --- Events ---
-    event VaultAccountCreated(address indexed accountAddress, address indexed owner, bytes32 salt);
-    event DepositRecorded(address indexed vaultAccount, address indexed user, address indexed token, uint256 amount);
-    event CreditConfirmed(address indexed vaultAccount, address indexed user, address indexed token, uint256 amount, uint128 fee, bytes metadata);
-    event WithdrawalProcessed(address indexed vaultAccount, address indexed user, address indexed token, uint256 amount, uint128 fee, bytes metadata);
-    event WithdrawalRequested(address indexed vaultAccount, address indexed user, address indexed token);
-    event UserWithdrawal(address indexed vaultAccount, address indexed user, address indexed token, uint256 amount);
+    event FundChartered(address indexed accountAddress, address indexed owner, bytes32 salt);
+    event ContributionRecorded(address indexed fundAddress, address indexed user, address indexed token, uint256 amount);
+    event CommitmentConfirmed(address indexed fundAddress, address indexed user, address indexed token, uint256 amount, uint128 fee, bytes metadata);
+    event RemittanceProcessed(address indexed fundAddress, address indexed user, address indexed token, uint256 amount, uint128 fee, bytes metadata);
+    event RescissionRequested(address indexed fundAddress, address indexed user, address indexed token);
+    event ContributionRescinded(address indexed fundAddress, address indexed user, address indexed token, uint256 amount);
     event BackendStatusChanged(address indexed backend, bool isAuthorized);
-    event Liquidation(address indexed vaultAccount, address indexed user, address indexed token, uint256 fee, bytes metadata);
+    event Liquidation(address indexed fundAddress, address indexed user, address indexed token, uint256 fee, bytes metadata);
     event OperatorFreeze(bool isFrozen);
+    event Donation(address indexed funder, address indexed token, uint256 amount, bool isNFT, bytes32 metadata);
 
     // --- State ---
-    IVaultRoot public immutable vaultRoot;
+    IFoundation public immutable foundation;
     mapping(bytes32 => bytes32) public custody;
     
     // --- Constructor ---
-    constructor(address _vaultRoot, address _owner) payable {
-        vaultRoot = IVaultRoot(_vaultRoot);
+    constructor(address _foundation, address _owner) payable {
+        foundation = IFoundation(_foundation);
         _initializeOwner(_owner);
     }
 
-    modifier onlyVaultRoot() {
-        require(msg.sender == address(vaultRoot), "Not vault root");
+    modifier onlyFoundation() {
+        require(msg.sender == address(foundation), "Not foundation");
         _;
     }
 
     modifier onlyBackend() {
-        require(vaultRoot.isBackend(msg.sender), "Not backend");
-        require(vaultRoot.backendAllowed(), "Operator Freeze");
+        require(foundation.isBackend(msg.sender), "Not backend");
+        require(foundation.backendAllowed(), "Operator Freeze");
         _;
     }
 
@@ -53,7 +54,7 @@ contract VaultAccount is Ownable, ReentrancyGuard {
         return bytes32(uint256(userOwned) | (uint256(escrow) << 128));
     }
 
-    /// @notice Handles ERC721 token transfers into the vault account
+    /// @notice Handles ERC721 token transfers into the chartered fund
     function onERC721Received(
         address,
         address from,
@@ -63,8 +64,8 @@ contract VaultAccount is Ownable, ReentrancyGuard {
         bytes32 key = _getCustodyKey(from, msg.sender);
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
         custody[key] = _packAmount(userOwned + 1, escrow);
-        emit DepositRecorded(address(this), from, msg.sender, 1);
-        vaultRoot.recordDeposit(from, msg.sender, 1);
+        emit ContributionRecorded(address(this), from, msg.sender, 1);
+        foundation.recordContribution(from, msg.sender, 1);
         return 0x150b7a02; // IERC721Receiver.onERC721Received.selector
     }
 
@@ -72,30 +73,30 @@ contract VaultAccount is Ownable, ReentrancyGuard {
         bytes32 key = _getCustodyKey(msg.sender, address(0));
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
         custody[key] = _packAmount(userOwned + uint128(msg.value), escrow);
-        emit DepositRecorded(address(this), msg.sender, address(0), msg.value);
-        vaultRoot.recordDeposit(msg.sender, address(0), msg.value);
+        emit ContributionRecorded(address(this), msg.sender, address(0), msg.value);
+        foundation.recordContribution(msg.sender, address(0), msg.value);
     }
 
-    function deposit(address token, uint256 amount) external nonReentrant {
+    function contribute(address token, uint256 amount) external nonReentrant {
         bytes32 key = _getCustodyKey(msg.sender, token);
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
         SafeTransferLib.safeTransferFrom(token, msg.sender, address(this), amount);
         custody[key] = _packAmount(userOwned + uint128(amount), escrow);
-        emit DepositRecorded(address(this), msg.sender, token, amount);
-        vaultRoot.recordDeposit(msg.sender, token, amount);
+        emit ContributionRecorded(address(this), msg.sender, token, amount);
+        foundation.recordContribution(msg.sender, token, amount);
     }
 
-    function depositFor(address user, address token, uint256 amount) external onlyBackend nonReentrant {
+    function contributeFor(address user, address token, uint256 amount) external onlyBackend nonReentrant {
         bytes32 key = _getCustodyKey(user, token);
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
         // The backend (msg.sender) must have an allowance to move the token
         SafeTransferLib.safeTransferFrom(token, msg.sender, address(this), amount);
         custody[key] = _packAmount(userOwned + uint128(amount), escrow);
-        emit DepositRecorded(address(this), user, token, amount);
-        vaultRoot.recordDeposit(user, token, amount);
+        emit ContributionRecorded(address(this), user, token, amount);
+        foundation.recordContribution(user, token, amount);
     }
 
-    function confirmCredit(address vaultAccount, address user, address token, uint256 escrowAmount, uint128 fee, bytes calldata metadata) external onlyBackend nonReentrant {
+    function commit(address fundAddress, address user, address token, uint256 escrowAmount, uint128 fee, bytes calldata metadata) external onlyBackend nonReentrant {
         bytes32 userKey = _getCustodyKey(user, token);
         bytes32 accountKey = _getCustodyKey(address(this), token);
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[userKey]);
@@ -106,12 +107,12 @@ contract VaultAccount is Ownable, ReentrancyGuard {
             (,uint128 accountEscrow) = _splitAmount(custody[accountKey]);
             custody[accountKey] =  _packAmount(0, accountEscrow + fee);
         }
-        emit CreditConfirmed(vaultAccount, user, token, escrowAmount, fee, metadata);
-        // vaultRoot.confirmCredit(vaultAccount, user, token, escrowAmount, fee, metadata);
+        emit CommitmentConfirmed(fundAddress, user, token, escrowAmount, fee, metadata);
+        foundation.recordCommitment(fundAddress, user, token, escrowAmount, fee, metadata);
     }
 
     // --- Withdrawals ---
-    function withdraw(address token) external nonReentrant {
+    function requestRescission(address token) external nonReentrant {
         // Here msg.sender is the user
         bytes32 key = _getCustodyKey(msg.sender, token);
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
@@ -124,24 +125,24 @@ contract VaultAccount is Ownable, ReentrancyGuard {
                 SafeTransferLib.safeTransfer(token, msg.sender, userOwned);
             }
             custody[key] =  _packAmount(0, escrow);
-            emit UserWithdrawal(address(this),msg.sender, token, userOwned);
-            vaultRoot.recordWithdrawal(msg.sender, token, userOwned, 0, "");
+            emit ContributionRescinded(address(this),msg.sender, token, userOwned);
+            foundation.recordRemittance(msg.sender, token, userOwned, 0, "");
         }else{
-            if(vaultRoot.refund()){
+            if(foundation.refund()){
                 if (token == address(0)) {
                     SafeTransferLib.safeTransferETH(msg.sender, escrow);
                 } else {
                     SafeTransferLib.safeTransfer(token, msg.sender, escrow);
                 }
             } else {
-                emit WithdrawalRequested(address(this),msg.sender,token);
-                vaultRoot.recordWithdrawalRequest(msg.sender, token);
+                emit RescissionRequested(address(this),msg.sender,token);
+                foundation.recordRescissionRequest(msg.sender, token);
             }
             
         }
     }
 
-    function withdrawTo(address user, address token, uint256 amount, uint128 fee, bytes calldata metadata) external onlyBackend nonReentrant {
+    function remit(address user, address token, uint256 amount, uint128 fee, bytes calldata metadata) external onlyBackend nonReentrant {
         bytes32 key = _getCustodyKey(user, token);
         (, uint128 escrow) = _splitAmount(custody[key]);
         require(escrow >= amount + fee, "Insufficient escrow balance");
@@ -161,11 +162,11 @@ contract VaultAccount is Ownable, ReentrancyGuard {
                 SafeTransferLib.safeTransfer(token, user, amount);
             }
         }
-        emit WithdrawalProcessed(address(this), user, token, amount, fee, metadata);
-        vaultRoot.recordWithdrawal(user, token, amount, fee, metadata);
+        emit RemittanceProcessed(address(this), user, token, amount, fee, metadata);
+        foundation.recordRemittance(user, token, amount, fee, metadata);
     }
 
-    function blessEscrow(address user, address token, uint256 amount) external onlyBackend {
+    function allocate(address user, address token, uint256 amount) external onlyBackend {
         bytes32 protocolKey = _getCustodyKey(address(this), token);
         (, uint128 protocolEscrow) = _splitAmount(custody[protocolKey]);
 
@@ -181,7 +182,7 @@ contract VaultAccount is Ownable, ReentrancyGuard {
         // Add to user escrow
         custody[userKey] = _packAmount(userOwned, userEscrow + uint128(amount));
 
-        emit CreditConfirmed(address(this), user, token, amount, 0, "BLESSED");
+        emit CommitmentConfirmed(address(this), user, token, amount, 0, "ALLOCATED");
     }
 
     // --- Admin & Utility ---
@@ -196,5 +197,34 @@ contract VaultAccount is Ownable, ReentrancyGuard {
     function performCalldata(address target, bytes calldata data) external payable onlyOwner {
         (bool success, ) = target.call{value: msg.value}(data);
         require(success, "Execution failed");
+    }
+
+    function donate(address token, uint256 amount, bytes32 metadata, bool isNFT) external payable nonReentrant {
+        if (token == address(0)) {
+            require(msg.value == amount, "ETH value mismatch");
+            bytes32 key = _getCustodyKey(address(this), address(0));
+            (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
+            custody[key] = _packAmount(userOwned + uint128(amount), escrow);
+        } else if (isNFT) {
+            // ERC721 transferFrom(tx.origin, address(this), amount) where amount is tokenId
+            (bool success, bytes memory data) = token.call(abi.encodeWithSelector(0x23b872dd, tx.origin, address(this), amount));
+            require(success && (data.length == 0 || abi.decode(data, (bool))), "NFT transfer failed");
+            bytes32 key = _getCustodyKey(address(this), token);
+            (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
+            custody[key] = _packAmount(userOwned + 1, escrow);
+        } else {
+            // ERC20
+            SafeTransferLib.safeTransferFrom(token, msg.sender, address(this), amount);
+            bytes32 key = _getCustodyKey(address(this), token);
+            (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
+            custody[key] = _packAmount(userOwned + uint128(amount), escrow);
+        }
+        emit Donation(msg.sender, token, amount, isNFT, metadata);
+        try foundation.recordDonation(msg.sender, token, amount, isNFT, metadata) {
+        } catch Error(string memory reason) {
+            revert(reason);
+        } catch (bytes memory lowLevelData) {
+            assembly { revert(add(lowLevelData, 32), mload(lowLevelData)) }
+        }
     }
 } 

@@ -3,21 +3,24 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Script.sol";
 import "forge-std/console.sol";
-import {VaultRoot} from "src/VaultRoot.sol";
+import {Foundation} from "src/Foundation.sol";
 
-contract MineVaultRootSalt is Script {
+contract MineFoundationSalt is Script {
 
     address constant factory = 0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed;
 
     function run() external {
         vm.startBroadcast();
         address admin = msg.sender;
+        address ownerNFT = vm.envAddress("TEST_OWNER_NFT");
+        uint256 ownerTokenId = vm.envUint("TEST_OWNER_TOKEN_ID");
+
         console2.log("Mining for salt to be deployed by:", admin);
         
         uint256 start = vm.envOr("START", uint256(0));
         uint256 end = vm.envOr("END", uint256(1_000_000));
 
-        bytes memory bytecode = type(VaultRoot).creationCode;
+        bytes memory bytecode = abi.encodePacked(type(Foundation).creationCode, abi.encode(ownerNFT, ownerTokenId));
         bytes32 initCodeHash = keccak256(bytecode);
         console2.log("Mining initCodeHash:");
         console2.logBytes32(initCodeHash);

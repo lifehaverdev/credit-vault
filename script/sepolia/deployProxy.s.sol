@@ -3,39 +3,32 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Script.sol";
 import "forge-std/console.sol";
-import {VaultRoot} from "src/VaultRoot.sol";
-
-// Use the existing implementation contract
-address payable constant IMPLEMENTATION = payable(0x115207b091Ea8ec2919C7F1368c6e1E5D1CC7207);
-address constant FACTORY = 0x0000000000006396FF2a80c067f99B3d2Ab4Df24;
-
-interface IERC1967Factory {
-    function deployDeterministicAndCall(
-        address implementation,
-        address admin,
-        bytes32 salt,
-        bytes calldata data
-    ) external payable returns (address proxy);
-}
+import {Foundation} from "src/Foundation.sol";
+import {ERC1967Factory} from "solady/utils/ERC1967Factory.sol";
 
 contract DeployProxy is Script {
+    
     function run() external {
+        address ownerNFT = vm.envAddress("OWNER_NFT");
+        uint256 ownerTokenId = vm.envUint("OWNER_TOKEN_ID");
+        
         vm.startBroadcast();
 
-        address admin = msg.sender;
-        bytes32 salt = bytes32(uint256(318504)); // your vanity salt
-        VaultRoot impl = VaultRoot(IMPLEMENTATION);
-        // Use empty initializer
-        bytes memory initCalldata = abi.encodeCall(impl.initialize, ());
+        // Deploy the implementation
+        Foundation implementation = new Foundation();
+        console.log("Deployed implementation to:", address(implementation));
 
-        address proxy = IERC1967Factory(FACTORY).deployDeterministicAndCall(
-            IMPLEMENTATION,
-            admin,
-            salt,
-            initCalldata
+        // Deploy the proxy using the factory
+        address proxy = new ERC1967Factory().deploy(
+            address(implementation),
+            msg.sender // Initial owner
         );
+        console.log("Deployed proxy to:", proxy);
 
-        console.log("!!WOW!! Proxy deployed and initialized at:", proxy);
+        // Initialize the proxy
+        Foundation(payable(proxy)).initialize(ownerNFT, ownerTokenId);
+        console.log("Proxy initialized.");
+
         vm.stopBroadcast();
     }
 }
