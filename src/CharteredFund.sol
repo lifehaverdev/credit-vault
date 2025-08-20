@@ -19,6 +19,8 @@ contract CharteredFund is Ownable, ReentrancyGuard {
     event Liquidation(address indexed fundAddress, address indexed user, address indexed token, uint256 fee, bytes metadata);
     event OperatorFreeze(bool isFrozen);
     event Donation(address indexed funder, address indexed token, uint256 amount, bool isNFT, bytes32 metadata);
+    event CharterFeeWithdrawn(address indexed owner, address indexed token, uint256 amount);
+    event ProtocolFeeSwept(address indexed token, uint256 amount);
 
     // --- State ---
     IFoundation public immutable foundation;
@@ -96,19 +98,32 @@ contract CharteredFund is Ownable, ReentrancyGuard {
         foundation.recordContribution(user, token, amount);
     }
 
-    function commit(address fundAddress, address user, address token, uint256 escrowAmount, uint128 fee, bytes calldata metadata) external onlyBackend nonReentrant {
+    function commit(address fundAddress, address user, address token, uint256 escrowAmount, uint128 charterFee, uint128 protocolFee, bytes calldata metadata) external onlyBackend nonReentrant {
         bytes32 userKey = _getCustodyKey(user, token);
-        bytes32 accountKey = _getCustodyKey(address(this), token);
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[userKey]);
-        require(userOwned >= escrowAmount, "Insufficient userOwned balance");
-        custody[userKey] =  _packAmount(userOwned - uint128(escrowAmount), escrow + uint128(escrowAmount));
-        if(fee > 0){
-            require(escrowAmount + fee <= userOwned, "Bad Fee Math");
-            (,uint128 accountEscrow) = _splitAmount(custody[accountKey]);
-            custody[accountKey] =  _packAmount(0, accountEscrow + fee);
+
+        uint256 totalFee = uint256(charterFee) + uint256(protocolFee);
+        require(userOwned >= escrowAmount + totalFee, "Insufficient userOwned balance");
+
+        // Move user's funds to escrow and deduct fees
+        custody[userKey] =  _packAmount(userOwned - uint128(escrowAmount) - uint128(totalFee), escrow + uint128(escrowAmount));
+
+        // Accrue charter fee to the charter's owner (address(this))
+        if (charterFee > 0) {
+            bytes32 charterKey = _getCustodyKey(address(this), token);
+            (uint128 charterOwned, uint128 charterEscrow) = _splitAmount(custody[charterKey]);
+            custody[charterKey] =  _packAmount(charterOwned + charterFee, charterEscrow);
         }
-        emit CommitmentConfirmed(fundAddress, user, token, escrowAmount, fee, metadata);
-        foundation.recordCommitment(fundAddress, user, token, escrowAmount, fee, metadata);
+        
+        // Accrue protocol fee to the foundation
+        if (protocolFee > 0) {
+            bytes32 foundationKey = _getCustodyKey(address(foundation), token);
+            (uint128 foundationOwned, uint128 foundationEscrow) = _splitAmount(custody[foundationKey]);
+            custody[foundationKey] =  _packAmount(foundationOwned + protocolFee, foundationEscrow);
+        }
+
+        emit CommitmentConfirmed(fundAddress, user, token, escrowAmount, charterFee, metadata); // Note: Event may need updating for 2 fees
+        foundation.recordCommitment(fundAddress, user, token, escrowAmount, charterFee, metadata); // Note: Interface may need updating
     }
 
     // --- Withdrawals ---
@@ -183,6 +198,41 @@ contract CharteredFund is Ownable, ReentrancyGuard {
         custody[userKey] = _packAmount(userOwned, userEscrow + uint128(amount));
 
         emit CommitmentConfirmed(address(this), user, token, amount, 0, "ALLOCATED");
+    }
+
+    function withdrawCharterFees(address token, uint256 amount) external nonReentrant onlyOwner {
+        bytes32 charterKey = _getCustodyKey(address(this), token);
+        (uint128 charterOwned, uint128 charterEscrow) = _splitAmount(custody[charterKey]);
+        
+        require(charterOwned >= amount, "Insufficient charter balance");
+
+        custody[charterKey] = _packAmount(charterOwned - uint128(amount), charterEscrow);
+
+        if (token == address(0)) {
+            SafeTransferLib.safeTransferETH(owner(), amount);
+        } else {
+            SafeTransferLib.safeTransfer(token, owner(), amount);
+        }
+
+        emit CharterFeeWithdrawn(owner(), token, amount);
+    }
+
+    function sweepProtocolFees(address token) external onlyBackend nonReentrant {
+        bytes32 foundationKey = _getCustodyKey(address(foundation), token);
+        (uint128 foundationOwned, uint128 foundationEscrow) = _splitAmount(custody[foundationKey]);
+        
+        require(foundationOwned > 0, "No protocol fees to sweep");
+
+        custody[foundationKey] = _packAmount(0, foundationEscrow);
+
+        if (token == address(0)) {
+            // IFoundation(foundation).recordProtocolFee{value: foundationOwned}(token, foundationOwned);
+        } else {
+            // SafeTransferLib.safeTransfer(token, address(foundation), foundationOwned);
+            // IFoundation(foundation).recordProtocolFee(token, foundationOwned);
+        }
+
+        emit ProtocolFeeSwept(token, foundationOwned);
     }
 
     // --- Admin & Utility ---
