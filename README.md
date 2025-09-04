@@ -61,6 +61,37 @@ The system is primarily designed for fungible assets. The `contribute` -> `commi
 - The Admin can enable a global `refund` mode, which allows users to rescind their `escrow` balance. This is an emergency escape hatch for fungible tokens.
 - All actions are transparently logged onchain for audit and dispute resolution.
 
+## Deterministic Deployment Across Chains
+
+To guarantee that the **proxy address is identical on every EVM-compatible chain**, we deploy in two deterministic steps.  Only five inputs participate in the CREATE2 address calculation; we lock all of them to constants that we commit to the repo.
+
+1. **Implementation (CREATE3)**  
+   • Deployer   → the canonical "keyless" CREATE3 deployer address (same on every chain)  
+   • Salt       → `IMPL_SALT` – a vanity-mined `bytes32` we store under version control  
+   • Bytecode   → compiled `Foundation` implementation (no constructor args)  
+   Result: **one implementation address valid on all chains.**
+
+2. **Proxy (CREATE2 via 0x…9497 factory)**  
+   • Factory    → `0x0000000000FFe8B47B3e2130213B802212439497` (0age's ImmutableCreate2Factory deployed everywhere)  
+   • Salt       → `PROXY_SALT` – another vanity-mined `bytes32`  
+   • InitCode   → `ERC1967Proxy` constructor bytecode with args:
+     ‑ `implementationAddress` (constant from step-1)
+     ‑ `admin` (the **virgin proxy-deployer wallet**, same address on every chain)  
+   Result: **identical proxy address on every chain.**
+
+3. **Initialize**  
+   After the proxy is created we call `initialize(ownerNFT, ownerTokenId)`.
+   The NFT contract address _may differ per chain_; this does **not** influence determinism because it is stored in proxy storage after deployment.
+
+### Best Practices / Golden Rules
+
+• _Never_ reuse the virgin proxy-deployer wallet for anything else; its address must stay constant but its nonce can increase after deployment.  
+• Commit both `IMPL_SALT` and `PROXY_SALT` to the repo (or env sample) to avoid accidental changes.  
+• Verify the keyless CREATE2/CREATE3 factories exist at the expected addresses on new chains before deploying.  
+• Keep compiler version and optimisation settings locked—bytecode drift breaks determinism.
+
+---
+
 # Technical Details
 - **Proxy:** `Foundation` is an ERC1967 UUPS proxy, upgradeable by the NFT owner.
 - **CREATE2:** `Foundation` and `CharteredFund` contracts can be deployed at deterministic addresses.

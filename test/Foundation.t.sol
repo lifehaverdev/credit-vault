@@ -989,7 +989,7 @@ contract FoundationTest is Test {
 
         // 3. Backend confirms credit to move NFT to escrow.
         vm.startPrank(backend);
-        charteredFund.commit(fundAddress, MSWhale, MILADYSTATION, 1, 0, "commit");
+        charteredFund.commit(fundAddress, MSWhale, MILADYSTATION, 1, 0, 0, "commit");
         vm.stopPrank();
 
         // 4. When backend calls remit...
@@ -1059,7 +1059,7 @@ contract FoundationTest is Test {
         vm.stopPrank();
 
         vm.startPrank(backend);
-        charteredFund.commit(fundAddress, MSWhale, MILADYSTATION, 1, 0, "commit");
+        charteredFund.commit(fundAddress, MSWhale, MILADYSTATION, 1, 0, 0, "commit");
         vm.stopPrank();
 
         // 2. Enable global refund mode.

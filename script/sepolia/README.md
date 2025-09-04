@@ -1,91 +1,133 @@
-# Credit Vault Deployment Guide
+# Credit Vault – Sepolia Deployment Guide (Deterministic & Cross-Chain)
 
-This guide outlines how to deterministically deploy the VaultRoot implementation 
-and ERC1967 proxy contracts with vanity addresses on Sepolia using Foundry.
+This guide walks through deploying the **Foundation** implementation deterministically with CREATE3 and then deploying an **ERC1967 proxy** at a vanity address via the ImmutableCreate2Factory.  Following these steps on any EVM chain will reproduce the *exact* same proxy address.
+
+---
 
 ## Prerequisites
 
-- Foundry installed (https://book.getfoundry.sh/)
-- Sepolia RPC fork available (via foundry.toml or CLI)
-- ETH funded deployer address
-- VaultRoot.sol compiled and available in src/
+• Foundry installed – <https://book.getfoundry.sh/>  
+• A Sepolia RPC endpoint (`$SEPOLIA_RPC`)  
+• ETH-funded wallets:  
+  - **IMPL_DEPLOYER** – *virgin* wallet (nonce-0). Its address is baked into the CREATE3 formula, so it **must be the same on every chain**. After deployment you may reuse it, but keep its nonce identical across chains if you redeploy.  
+  - **PROXY_ADMIN** – any wallet whose address will become the proxy admin. It does **not** influence the CREATE2 address, but keep it constant for consistency.  
+  - **CALLER_WALLET** – the wallet that actually broadcasts the proxy deployment tx (often the same as `PROXY_ADMIN`).
+• Contracts compiled (`forge build`).
 
-## Step 1: Mine a Vanity Salt for the Implementation
+---
 
-Uses the CreateX factory:
-0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed
+## Deterministic Inputs
 
-Script: scripts/MineVaultRootSalt.s.sol
+| Purpose | Value | Notes |
+|---------|-------|-------|
+| CREATE3 Deployer | keyless CREATE3 contract (canonical, same on every chain) | Used by `CREATE3.deployDeterministic()` |
+| `IMPL_SALT` | vanity-mined bytes32 | Produces a pretty implementation address |
+| ImmutableCreate2Factory | `0x0000000000FFe8B47B3e2130213B802212439497` | 0age’s factory – exists on many chains |
+| `PROXY_SALT` | vanity-mined bytes32 | Determines the proxy’s vanity prefix |
+| Proxy admin | **PROXY_ADMIN** address | Hard-coded into the proxy constructor |
 
-Run:
-  forge script scripts/MineVaultRootSalt.s.sol --fork-url $SEPOLIA_RPC --sender $YOUR_ADDRESS
+Lock those five inputs and you get the same proxy address on every chain.
 
-Optional: Set START and END for the salt range:
-  START=0 END=100000 forge script scripts/MineVaultRootSalt.s.sol --fork-url ...
+---
 
-Logs the salt and predicted address when found.
+## Step 1 – Mine a Vanity Salt for the Implementation
 
-## Step 2: Deploy the Implementation
+```
+forge script script/sepolia/MineFoundationImplSalt.s.sol \
+  --fork-url $SEPOLIA_RPC \
+  --sender $IMPL_DEPLOYER
+```
 
-Script: scripts/DeployVaultRoot.s.sol
+The script sweeps a salt range until it finds an implementation address you like. Save the winning `IMPL_SALT` to your `.env`.
 
-Update the salt in the script and deploy:
-  forge script scripts/DeployVaultRoot.s.sol --fork-url $SEPOLIA_RPC --broadcast --sender $YOUR_ADDRESS
+---
 
-Success output:
-  !WOW! Deployed VaultRoot to: 0x...
+## Step 2 – Deploy the Foundation Implementation (CREATE3)
 
-## Step 3: Mine a Vanity Salt for the Proxy
+```
+IMPL_SALT=<your-salt> \
+forge script script/sepolia/DeployFoundationImplementation.s.sol \
+  --fork-url $SEPOLIA_RPC \
+  --broadcast \
+  --sender $IMPL_DEPLOYER
+```
 
-Uses the ERC1967 factory:
-0x0000000000006396FF2a80c067f99B3d2Ab4Df24
+Successful output:
+```
+Foundation implementation deployed at: 0x1152…
+```
+The address should match what you computed during mining. Commit it to the address table below.
 
-Script: scripts/MineERC1967Salt.s.sol
+---
 
-Run:
-  X=0 forge script scripts/MineERC1967Salt.s.sol --fork-url $SEPOLIA_RPC --sender $YOUR_ADDRESS
+## Step 3 – Mine a Vanity Salt for the Proxy (optional)
 
-Logs a vanity match when found:
-  !!WOW!! Found vanity address at salt: 318504
+```
+forge script script/sepolia/MineERC1967Salt.s.sol \
+  --fork-url $SEPOLIA_RPC \
+  --sender $YOUR_ADDRESS \
+  -vvvv
+```
 
-## Step 4: Deploy the Proxy and Initialize
+The script searches for a salt where the predicted proxy address starts with `0x01152…`. Save the `PROXY_SALT`.
 
-Script: scripts/DeployProxy.s.sol
+---
 
-Update:
-- IMPLEMENTATION = your deployed VaultRoot address
-- salt = your mined vanity salt
+## Step 4 – Deploy the Proxy & Initialize
 
-Run:
-  forge script scripts/DeployProxy.s.sol --fork-url $SEPOLIA_RPC --broadcast --sender $YOUR_ADDRESS
+```
+IMPL_ADDRESS=<implementation-addr> \
+OWNER_NFT=<erc721-address> \
+OWNER_TOKEN_ID=<tokenId> \
+PROXY_SALT=<your-salt> \
+forge script script/sepolia/DeployFoundationProxy.s.sol \
+  --fork-url $SEPOLIA_RPC \
+  --broadcast \
+  --sender $CALLER_WALLET
+```
 
-This uses `deployDeterministicAndCall()` to deploy and initialize in one step.
+• The script can be sent from any wallet (`CALLER_WALLET`).  
+• The proxy admin address is set to `PROXY_ADMIN` in the constructor.  
+• The script deploys the proxy via the factory, then calls `initialize(ownerNFT, ownerTokenId)` in the same tx.
 
-## Optional: Verify the Implementation Contract
+Expected console output:
+```
+Proxy deployed to: 0x01152…
+Proxy initialised.
+```
 
-You can verify the implementation on Etherscan using:
+Repeat Steps 2-4 on any other chain with the same salts and wallets and you will receive the exact same proxy address.
 
-  forge verify-contract --chain-id 11155111 \
-    0xYourImplementationAddress \
-    src/VaultRoot.sol:VaultRoot \
-    --etherscan-api-key $ETHERSCAN_KEY
+---
 
-Note: Etherscan may take time to detect the proxy contract correctly.
+## Optional – Verify Implementation on Etherscan
 
-## Summary of Addresses
+```
+forge verify-contract \
+  --chain-id 11155111 \
+  0xYourImplementationAddress \
+  src/Foundation.sol:Foundation \
+  --etherscan-api-key $ETHERSCAN_KEY
+```
 
-Component        | Address
------------------|-----------------------------------------
-Create2 Factory  | 0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed
-ERC1967 Factory  | 0x0000000000006396FF2a80c067f99B3d2Ab4Df24
-VaultRoot Impl   | 0x115207b091Ea8ec2919C7F1368c6e1E5D1CC7207
-Vanity Proxy     | 0x011528b1d5822B3269d919e38872cC33bdec6d17
+---
+
+## Summary of Deterministic Addresses (Sepolia example)
+
+| Component | Address |
+|-----------|---------|
+| CREATE3 Deployer | *canonical* |
+| Implementation (Foundation) | `0x1152…` |
+| ImmutableCreate2Factory | `0x0000000000FFe8B47B3e2130213B802212439497` |
+| Proxy (ERC1967) | `0x01152…` |
+
+---
 
 ## Local Testing
 
-Run tests on Sepolia fork:
+```
+forge test --fork-url $SEPOLIA_RPC
+```
 
-  forge test --fork-url $SEPOLIA_RPC
-
-If you are simulating upgrades, use the deployed proxy address inside your tests.
+Use the deterministic proxy address inside your tests when needed.
 
