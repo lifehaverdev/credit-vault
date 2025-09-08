@@ -57,7 +57,7 @@ contract FoundationMetaTest is Test {
         root.initialize(MILADYSTATION, 598);
 
         vm.prank(admin);
-        root.setBackend(backend, true);
+        root.setMarshal(backend, true);
 
         vm.prank(admin);
         root.setFreeze(true);
@@ -134,11 +134,11 @@ contract FoundationMetaTest is Test {
         FoundationV2 v2Proxy = FoundationV2(payable(proxyAddress));
 
         vm.prank(user);
-        vm.expectRevert(IFoundation.NotBackend.selector);
+        vm.expectRevert(IFoundation.Auth.selector);
         v2Proxy.charterFund(user, "salt");
 
         vm.prank(user);
-        vm.expectRevert(IFoundation.NotOwner.selector);
+        vm.expectRevert(IFoundation.Auth.selector);
         v2Proxy.setFreeze(false);
 
         uint256 contributeAmount = 1 ether;
@@ -181,6 +181,9 @@ contract FoundationMetaTest is Test {
     function testGas_root_vs_fund_contribute_eth() public {
         console.log("");
         console.log("--- Contribute Gas ---");
+        // Unfreeze marshal operations so backend can charter fund
+        vm.prank(admin);
+        root.setFreeze(false);
         vm.prank(backend);
         address fundAddress = root.charterFund(user, "salt");
         
@@ -204,6 +207,9 @@ contract FoundationMetaTest is Test {
     function testGas_allocate_vs_commit() public {
         console.log("");
         console.log("--- Credit Method Gas ---");
+        // Unfreeze for backend allocate/commit
+        vm.prank(admin);
+        root.setFreeze(false);
         uint256 amount = 1 ether;
         vm.prank(user);
         (bool s, ) = proxyAddress.call{value: amount * 2}("");
@@ -276,6 +282,9 @@ contract FoundationMetaTest is Test {
     function testGas_backendRemit_eth_vs_erc20() public {
         console.log("");
         console.log("--- Backend Remit Gas ---");
+        // Unfreeze for backend operations
+        vm.prank(admin);
+        root.setFreeze(false);
         uint256 ethAmount = 1 ether;
         vm.prank(user);
         (bool s, ) = proxyAddress.call{value: ethAmount}("");
@@ -305,7 +314,7 @@ contract FoundationMetaTest is Test {
     }
 
     /*
-    test_canInitializeAndSetBackend()	✔ Initialization & state
+    test_canInitializeAndsetMarshal()	✔ Initialization & state
     test_initializeIsProtected()	✔ Cannot re-init
     test_canUpgradeAndCallNewLogic()	✔ Upgrade path works
     test_onlyAdminCanUpgrade()	✔ Admin-only enforcement

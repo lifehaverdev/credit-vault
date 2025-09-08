@@ -44,13 +44,14 @@ contract FoundationTest is Test {
     event RemittanceProcessed(address indexed fundAddress, address indexed user, address indexed token, uint256 amount, uint128 fee, bytes metadata);
     event RescissionRequested(address indexed fundAddress, address indexed user, address indexed token);
     event ContributionRescinded(address indexed fundAddress, address indexed user, address indexed token, uint256 amount);
-    event BackendStatusChanged(address indexed backend, bool isAuthorized);
+    event MarshalStatusChanged(address indexed marshal, bool isAuthorized);
     event Liquidation(address indexed fundAddress, address indexed user, address indexed token, uint256 fee, bytes metadata);
     event OperatorFreeze(bool isFrozen);
     event RefundChanged(bool isRefund);
 
-    // Custom error from Solady's SafeTransferLib
+    // Custom errors from Solady's SafeTransferLib
     error TransferFailed();
+    error TransferFromFailed();
 
     function setUp() public {
         backend = makeAddr("backend");
@@ -75,11 +76,7 @@ contract FoundationTest is Test {
 
         // Set initial backend
         vm.prank(admin);
-        root.setBackend(backend, true);
-
-        // Allow backend operations. The name is confusing: setFreeze(true) sets backendAllowed = true.
-        vm.prank(admin);
-        root.setFreeze(true);
+        root.setMarshal(backend, true);
     }
 
     // --- Helper Functions ---
@@ -102,51 +99,51 @@ contract FoundationTest is Test {
     function test_initialState() public view {
         // Tests that the root contract is initialized with the correct owner and that the initial backend is set.
         assertEq(IERC721(MILADYSTATION).ownerOf(MS_TOKEN_ID), admin, "Admin should be the owner of the NFT");
-        assertTrue(root.isBackend(backend), "Initial backend should be set");
-        assertTrue(root.backendAllowed(), "Backend operations should be allowed initially");
+        assertTrue(root.isMarshal(backend), "Initial backend should be set");
+        assertFalse(root.marshalFrozen(), "Backend operations should be allowed initially");
         assertFalse(root.refund(), "Refund mode should be off initially");
     }
 
-    function test_setBackend_byOwner_succeeds() public {
+    function test_setMarshal_byOwner_succeeds() public {
         vm.prank(admin);
         vm.expectEmit(true, true, true, true);
-        emit BackendStatusChanged(anotherUser, true);
-        root.setBackend(anotherUser, true);
-        assertTrue(root.isBackend(anotherUser), "New backend should be authorized");
+        emit MarshalStatusChanged(anotherUser, true);
+        root.setMarshal(anotherUser, true);
+        assertTrue(root.isMarshal(anotherUser), "New backend should be authorized");
 
         vm.prank(admin);
         vm.expectEmit(true, true, true, true);
-        emit BackendStatusChanged(anotherUser, false);
-        root.setBackend(anotherUser, false);
-        assertFalse(root.isBackend(anotherUser), "Backend should be de-authorized");
+        emit MarshalStatusChanged(anotherUser, false);
+        root.setMarshal(anotherUser, false);
+        assertFalse(root.isMarshal(anotherUser), "Backend should be de-authorized");
     }
 
     function test_onlyOwnerFunctions_revertForEOA() public {
         vm.startPrank(user);
-        vm.expectRevert(IFoundation.NotOwner.selector);
-        root.setBackend(anotherUser, true);
+        vm.expectRevert(IFoundation.Auth.selector);
+        root.setMarshal(anotherUser, true);
         vm.stopPrank();
     }
 
     function test_setFreeze_byOwner_succeeds() public {
-        // Freeze
+        // Unfreeze (enable marshal operations)
         vm.prank(admin);
         vm.expectEmit(true, true, true, true);
         emit OperatorFreeze(false);
         root.setFreeze(false);
-        assertFalse(root.backendAllowed(), "Backend operations should be frozen");
+        assertFalse(root.marshalFrozen(), "Backend operations should be unfrozen (allowed)");
 
-        // Unfreeze
+        // Freeze again (disable marshal operations)
         vm.prank(admin);
         vm.expectEmit(true, true, true, true);
         emit OperatorFreeze(true);
         root.setFreeze(true);
-        assertTrue(root.backendAllowed(), "Backend operations should be unfrozen");
+        assertTrue(root.marshalFrozen(), "Backend operations should be frozen (disallowed)");
     }
 
     function test_setFreeze_byNonOwner_reverts() public {
         vm.startPrank(user);
-        vm.expectRevert(IFoundation.NotOwner.selector);
+        vm.expectRevert(IFoundation.Auth.selector);
         root.setFreeze(false);
         vm.stopPrank();
     }
@@ -186,6 +183,10 @@ contract FoundationTest is Test {
         ERC20(PEPE).transfer(backend, contributeAmount);
 
         // 2. Backend approves root and contributes for the user
+        // Unfreeze marshal operations first
+        vm.prank(admin);
+        root.setFreeze(false);
+
         vm.startPrank(backend);
         ERC20(PEPE).approve(address(root), contributeAmount);
 
@@ -204,7 +205,7 @@ contract FoundationTest is Test {
 
     function test_root_contributeFor_byNonBackend_reverts() public {
         vm.startPrank(user);
-        vm.expectRevert(IFoundation.NotBackend.selector);
+        vm.expectRevert(TransferFromFailed.selector);
         root.contributeFor(anotherUser, PEPE, 1_000_000 * 1e18);
         vm.stopPrank();
     }
@@ -226,6 +227,10 @@ contract FoundationTest is Test {
         assertEq(escrow_before, 0);
 
         // 2. Backend confirms credit
+        // Unfreeze marshal operations
+        vm.prank(admin);
+        root.setFreeze(false);
+
         vm.startPrank(backend);
         uint256 amountToEscrow = contributeAmount / 2;
         
@@ -257,6 +262,10 @@ contract FoundationTest is Test {
         // Move the transferred amount to the protocol's "userOwned" balance using vm.store
         vm.store(address(root), keccak256(abi.encode(protocolKey, 0)), _packAmount(uint128(protocolAmount), 0));
         
+        // Unfreeze marshal operations
+        vm.prank(admin);
+        root.setFreeze(false);
+
         // Use commit to move it to the protocol's *escrow* balance
         vm.prank(backend);
         root.commit(address(root), address(root), PEPE, protocolAmount, 0, "seed protocol");
@@ -267,6 +276,10 @@ contract FoundationTest is Test {
         assertEq(protocolEscrow_before, protocolAmount, "Protocol should have escrow balance");
 
         // 2. Bless the user with some of the protocol's escrow
+        // Ensure marshal operations allowed
+        vm.prank(admin);
+        root.setFreeze(false);
+
         vm.startPrank(backend);
         uint256 amountToBless = protocolAmount / 4;
 
@@ -298,10 +311,13 @@ contract FoundationTest is Test {
         vm.stopPrank();
 
         // 2. Attempt to bless with more than is available
+        vm.prank(admin);
+        root.setFreeze(false);
+
         vm.startPrank(backend);
         uint256 amountToBless = protocolAmount + 1;
         
-        vm.expectRevert(IFoundation.NotEnoughInProtocolEscrow.selector);
+        vm.expectRevert(IFoundation.Math.selector);
         root.allocate(user, PEPE, amountToBless);
         vm.stopPrank();
 
@@ -326,6 +342,9 @@ contract FoundationTest is Test {
         vm.stopPrank();
 
         // 2. Backend confirms credit for half
+        vm.prank(admin);
+        root.setFreeze(false);
+
         vm.prank(backend);
         root.commit(address(root), pepeWhale, PEPE, escrowAmount, 0, "");
         vm.stopPrank();
@@ -410,7 +429,7 @@ contract FoundationTest is Test {
         uint128 fee = 0;
 
         vm.startPrank(backend);
-        vm.expectRevert(IFoundation.InsufficientEscrowBalance.selector);
+        vm.expectRevert(IFoundation.Math.selector);
         root.remit(pepeWhale, PEPE, remitAmount, fee, "remit");
         vm.stopPrank();
 
@@ -588,7 +607,7 @@ contract FoundationTest is Test {
         vm.startPrank(admin);
         root.setFreeze(false);
         vm.stopPrank();
-        assertFalse(root.backendAllowed(), "Backend should be frozen");
+        assertFalse(root.marshalFrozen(), "Backend should be frozen");
 
         // User can still rescind
         uint256 balance_before = user.balance;
@@ -616,7 +635,7 @@ contract FoundationTest is Test {
         vm.startPrank(admin);
         root.setFreeze(false);
         vm.stopPrank();
-        assertFalse(root.backendAllowed(), "Backend should be frozen");
+        assertFalse(root.marshalFrozen(), "Backend should be frozen");
 
         // 3. User can still rescind from their fund
         uint256 balance_before = user.balance;
@@ -629,7 +648,7 @@ contract FoundationTest is Test {
 
     function test_onlyCharteredFund_modifier() public {
         vm.startPrank(user);
-        vm.expectRevert(IFoundation.NotCharteredFund.selector);
+        vm.expectRevert(IFoundation.Auth.selector);
         root.recordContribution(user, PEPE, 1 ether);
     }
 
@@ -767,7 +786,7 @@ contract FoundationTest is Test {
         vm.startPrank(backend);
         
         // Then: The call reverts because `safeTransfer` is for ERC20s.
-        vm.expectRevert(TransferFailed.selector);
+        vm.expectRevert(IFoundation.Fail.selector);
         root.remit(MSWhale, MILADYSTATION, 1, 0, "remit");
         vm.stopPrank();
 
@@ -802,7 +821,7 @@ contract FoundationTest is Test {
 
         // When: user calls requestRescission()
         // Then: The call reverts because `safeTransfer` is for ERC20s.
-        vm.expectRevert(TransferFailed.selector);
+        vm.expectRevert(IFoundation.Fail.selector);
         root.requestRescission(MILADYSTATION);
         vm.stopPrank();
 
@@ -839,7 +858,7 @@ contract FoundationTest is Test {
         vm.startPrank(MSWhale);
         // NOTE: The current implementation attempts an ERC20 transfer which will fail.
         // This test documents that even with refund mode on, NFT rescission is broken.
-        vm.expectRevert(TransferFailed.selector);
+        vm.expectRevert(IFoundation.Fail.selector);
         root.requestRescission(MILADYSTATION);
         vm.stopPrank();
 
@@ -996,7 +1015,7 @@ contract FoundationTest is Test {
         vm.startPrank(backend);
         
         // Then: The call reverts because `safeTransfer` is for ERC20s.
-        vm.expectRevert(TransferFailed.selector);
+        vm.expectRevert(IFoundation.Fail.selector);
         charteredFund.remit(MSWhale, MILADYSTATION, 1, 0, "remit");
         vm.stopPrank();
 
@@ -1028,7 +1047,7 @@ contract FoundationTest is Test {
         
         // 3. When user calls requestRescission...
         // Then: The call reverts because `safeTransfer` is for ERC20s.
-        vm.expectRevert(TransferFailed.selector);
+        vm.expectRevert(IFoundation.Fail.selector);
         charteredFund.requestRescission(MILADYSTATION);
         vm.stopPrank();
 
@@ -1070,7 +1089,7 @@ contract FoundationTest is Test {
         // 3. When user calls requestRescission...
         vm.startPrank(MSWhale);
         // Then: The call reverts because `safeTransfer` is for ERC20s.
-        vm.expectRevert(TransferFailed.selector);
+        vm.expectRevert(IFoundation.Fail.selector);
         charteredFund.requestRescission(MILADYSTATION);
         vm.stopPrank();
 

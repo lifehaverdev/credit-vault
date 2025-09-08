@@ -26,7 +26,7 @@ contract DeterministicAddressTest is Test {
     address constant CALLER_WALLET = 0x1111222233334444555566667777888899990000; // broadcasts proxy deployment
     // ---------------------------------------------------------------------
 
-    function _predictImpl() internal view returns (address) {
+    function _predictImpl() internal pure returns (address) {
         return CREATE3.predictDeterministicAddress(IMPL_SALT, IMPL_DEPLOYER);
     }
 

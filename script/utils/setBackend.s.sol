@@ -21,7 +21,7 @@ contract SetBackend is Script {
         foundation = Foundation(foundationAddr);
 
         vm.startBroadcast();
-        foundation.setBackend(backend, isAuthorized);
+        foundation.setMarshal(backend, isAuthorized);
         vm.stopBroadcast();
 
         console2.log("Backend status updated for address:");

@@ -17,8 +17,8 @@ contract SetFreeze is Script {
         }
         foundation = Foundation(foundationAddr);
 
-        bool currentStatus = foundation.backendAllowed();
-        console2.log("Current backendAllowed status:");
+        bool currentStatus = foundation.marshalFrozen();
+        console2.log("Current marshalFrozen status:");
         console2.logBool(currentStatus);
 
         bool newStatus = !currentStatus;
@@ -27,7 +27,7 @@ contract SetFreeze is Script {
         foundation.setFreeze(newStatus);
         vm.stopBroadcast();
 
-        console2.log("Backend allowed status updated to:");
+        console2.log("Marshal frozen status updated to:");
         console2.logBool(newStatus);
     }
 } 

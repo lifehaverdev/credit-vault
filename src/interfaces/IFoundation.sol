@@ -2,21 +2,14 @@
 pragma solidity ^0.8.28;
 
 interface IFoundation {
-    error NotOwner();
-    error NotBackend();
-    error NotCharteredFund();
-    error NotEnoughInProtocolEscrow();
-    error InsufficientUserOwnedBalance();
-    error InsufficientEscrowBalance();
-    error BadFeeMath();
-    error OperatorFrozen();
-    error Create2Failed();
-    error MulticallFailed();
-    error MulticallOnlyByOrigin();
 
-    function isBackend(address _backend) external view returns (bool);
+    error Auth();
+    error Math();
+    error Fail();
+
+    function isMarshal(address _marshal) external view returns (bool);
     function refund() external view returns (bool);
-    function backendAllowed() external view returns (bool);
+    function marshalFrozen() external view returns (bool);
     function requestRescission(address token) external;
 
     function recordContribution(address user, address token, uint256 amount) external;
