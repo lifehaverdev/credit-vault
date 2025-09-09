@@ -17,3 +17,4 @@ docs/
 
 # Ignore the remapped previous directory
 src/previous_disabled/
+node_modules/
