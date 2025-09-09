@@ -30,8 +30,11 @@ import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {Initializable} from "solady/utils/Initializable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
-import {CharteredFund} from "./CharteredFund.sol";
+import {UpgradeableBeacon} from "solady/utils/UpgradeableBeacon.sol";
+import {ERC1967BeaconProxy} from "solady/utils/ext/zksync/ERC1967BeaconProxy.sol";
+import {CharteredFundImplementation} from "./CharteredFundImplementation.sol";
 import {Keep} from "./Keep.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 
 interface ICreate2Factory {
     function deploy(bytes calldata _initCode, bytes32 _salt) external returns (address);
@@ -63,6 +66,7 @@ contract Foundation is Keep, UUPSUpgradeable, Initializable, ReentrancyGuard {
     bool public refund = false;
     address public ownerNFT;
     uint256 public ownerTokenId;
+    address public charterBeacon;
 
     /*
        ______
@@ -85,6 +89,8 @@ contract Foundation is Keep, UUPSUpgradeable, Initializable, ReentrancyGuard {
     event OperatorFreeze(bool isFrozen);
     event RefundChanged(bool isRefund);
     event Donation(address indexed funder, address indexed token, uint256 amount, bool isNFT, bytes32 metadata);
+    error AlreadyInit();
+    error InvalidBeacon();
 
     /*
        ______
@@ -156,37 +162,39 @@ contract Foundation is Keep, UUPSUpgradeable, Initializable, ReentrancyGuard {
 
     /**
     * @notice Computes the expected address for a new chartered fund without deploying it.
-    * @param _owner The address that will own the new fund.
-    * @param _salt The 32-byte salt for the CREATE2 operation.
+    * @param _owner The future owner (unused in address derivation but preserved for API compatibility).
+    * @param _salt  The 32-byte salt for the CREATE2 operation.
     * @return The computed address of the new chartered fund.
     */
     function computeCharterAddress(address _owner, bytes32 _salt) external view returns (address) {
-        bytes memory bytecode = type(CharteredFund).creationCode;
-        bytes memory constructorArgs = abi.encode(address(this), _owner);
-        bytes32 initCodeHash = keccak256(abi.encodePacked(bytecode, constructorArgs));
-        
-        return address(uint160(uint256(keccak256(abi.encodePacked(
-            bytes1(0xff),
+        bytes memory args = abi.encodeWithSelector(
+            CharteredFundImplementation.initialize.selector,
             address(this),
+            _owner
+        );
+        return LibClone.predictDeterministicAddressERC1967BeaconProxy(
+            charterBeacon,
+            args,
             _salt,
-            initCodeHash
-        )))));
+            address(this)
+        );
     }
 
-    function charterFund(address _owner, bytes32 _salt) external onlyMarshal returns (address) {
-        bytes memory bytecode = type(CharteredFund).creationCode;
-        bytes memory constructorArgs = abi.encode(address(this), _owner);
-        bytes memory initCode = abi.encodePacked(bytecode, constructorArgs);
-        
-        address fund;
-        assembly {
-            fund := create2(0, add(initCode, 0x20), mload(initCode), _salt)
-        }
-        if(fund == address(0)) revert Fail();
+    function charterFund(address _owner, bytes32 _salt) external onlyMarshal returns (address fund) {
+        bytes memory args = abi.encodeWithSelector(
+            CharteredFundImplementation.initialize.selector,
+            address(this),
+            _owner
+        );
+
+        fund = LibClone.deployDeterministicERC1967BeaconProxy(charterBeacon, args, _salt);
+        if (fund == address(0)) revert Fail();
+
+        // Call initialize on the newly deployed proxy so storage is set.
+        CharteredFundImplementation(payable(fund)).initialize(address(this), _owner);
 
         isCharteredFund[fund] = true;
         emit FundChartered(fund, _owner, _salt);
-        return fund;
     }
 
     function multicall(bytes[] calldata data) external onlyMarshal {
@@ -343,9 +351,37 @@ contract Foundation is Keep, UUPSUpgradeable, Initializable, ReentrancyGuard {
     */
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
+    /*//////////////////////////////////////////////////////////////////////////
+                                BEACON SETUP & UPGRADE
+    //////////////////////////////////////////////////////////////////////////*/
+
+    function _setCharterBeacon(address beacon) internal {
+        if (charterBeacon != address(0)) revert AlreadyInit();
+        charterBeacon = beacon;
+
+        // Ownership of the beacon must be transferred to this contract by the
+        // deployer externally (e.g. in deployment scripts or test setUp).
+
+        // Ensure beacon implements implementation() and returns non-zero.
+        (, bytes memory data) = beacon.staticcall(abi.encodeWithSignature("implementation()"));
+        if (data.length == 0) revert InvalidBeacon();
+    }
+
+    function upgradeCharterImplementation(address newImpl) external onlyOwner {
+        UpgradeableBeacon(charterBeacon).upgradeTo(newImpl);
+    }
+
     /// Initialization ///
-    function initialize(address _ownerNFT, uint256 _ownerTokenId) external initializer {
+    function initialize(address _ownerNFT, uint256 _ownerTokenId, address _charterBeacon) external initializer {
         ownerNFT = _ownerNFT;
         ownerTokenId = _ownerTokenId;
+        _setCharterBeacon(_charterBeacon);
     }
+
+    /// @dev One-time function to take ownership of the `charterBeacon` after
+    ///      deployment. Must be called by the current beacon owner.
+    function adoptBeacon() external {
+        UpgradeableBeacon(charterBeacon).transferOwnership(address(this));
+    }
+
 } 

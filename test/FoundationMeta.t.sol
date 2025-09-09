@@ -6,8 +6,11 @@ import "forge-std/console.sol";
 import {Foundation} from "../src/Foundation.sol";
 import {FoundationV2} from "./mocks/FoundationV2.sol";
 import {CharteredFund} from "../src/CharteredFund.sol";
+import {CharteredFundImplementation} from "../src/CharteredFundImplementation.sol";
+import {UpgradeableBeacon} from "solady/utils/UpgradeableBeacon.sol";
 import {ERC1967Factory} from "solady/utils/ERC1967Factory.sol";
 import {ERC20} from "solady/tokens/ERC20.sol";
+import {MockERC721} from "./mocks/MockERC721.sol";
 import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 import {IFoundation} from "../src/interfaces/IFoundation.sol";
 
@@ -31,11 +34,23 @@ contract FoundationMetaTest is Test {
     address internal pepeWhale = 0x4a2C786651229175407d3A2D405d1998bcf40614;
 
     address private constant MILADYSTATION = 0xB24BaB1732D34cAD0A7C7035C3539aEC553bF3a0;
+    address ownerNFT;
+    uint256 ownerTokenId;
+
+    address testNFT;
+    uint256 testTokenId;
     address private constant MSWhale = 0x65ccFF5cFc0E080CdD4bb29BC66A3F71153382a2;
 
     event ContributionRecorded(address indexed fundAddress, address indexed user, address indexed token, uint256 amount);
 
     function setUp() public {
+        // Automatically select the mainnet fork defined in foundry.toml.
+        // This removes the need for passing `--fork-url` when running tests.
+        // Ensure your foundry.toml has an entry:
+        // [rpc_endpoints]
+        // mainnet = "${RPC_URL}"
+        uint256 mainnetFork = vm.createSelectFork(vm.rpcUrl("mainnet"));
+        
         backend = makeAddr("backend");
         user = makeAddr("user");
         anotherUser = makeAddr("anotherUser");
@@ -47,20 +62,34 @@ contract FoundationMetaTest is Test {
         vm.deal(pepeWhale, 10 ether);
         
         address impl = address(new Foundation());
-        proxyAddress = new ERC1967Factory().deploy(
-            impl,
-            admin
-        );
-        root = Foundation(payable(proxyAddress));
-        
-        vm.prank(admin);
-        root.initialize(MILADYSTATION, 598);
 
+        // Deploy CharteredFund implementation and beacon
+        address cfImpl = address(new CharteredFundImplementation());
+        address beacon = address(new UpgradeableBeacon(admin, cfImpl));
+
+        // 2. Pick owner NFT per chain
+        (ownerNFT, ownerTokenId) = _selectOwnerNFT();
+
+        // Deploy implementation and proxy for Foundation
+        address proxy = new ERC1967Factory().deploy(address(new Foundation()), admin);
+        root = Foundation(payable(proxy));
+        proxyAddress = proxy;
+        // Call initialize on the proxy
+        vm.prank(admin);
+        root.initialize(ownerNFT, ownerTokenId, beacon);
+
+        // Transfer beacon ownership to the Foundation
+        vm.prank(admin);
+        UpgradeableBeacon(beacon).transferOwnership(address(root));
+        
         vm.prank(admin);
         root.setMarshal(backend, true);
 
-        vm.prank(admin);
-        root.setFreeze(true);
+        // mint secondary NFT
+        MockERC721 sec = new MockERC721();
+        sec.mint(MSWhale, 2);
+        testNFT = address(sec);
+        testTokenId = 2;
     }
     
     function _getCustodyKey(address _user, address _token) internal pure returns (bytes32) {
@@ -74,6 +103,18 @@ contract FoundationMetaTest is Test {
 
     function _packAmount(uint128 userOwned, uint128 escrow) internal pure returns(bytes32) {
         return bytes32(uint256(userOwned) | (uint256(escrow) << 128));
+    }
+
+    function _selectOwnerNFT() internal returns (address nft, uint256 tokenId) {
+        address milady = MILADYSTATION;
+        uint256 id = 598;
+        (bool ok, bytes memory data) = milady.staticcall(abi.encodeWithSelector(0x6352211e, id));
+        if (ok && data.length == 32 && abi.decode(data, (address)) == admin) {
+            return (milady, id);
+        }
+        MockERC721 mock = new MockERC721();
+        mock.mint(admin, 1);
+        return (address(mock), 1);
     }
 
     // --- 🔄 Upgradeability Tests ---
@@ -150,16 +191,18 @@ contract FoundationMetaTest is Test {
     }
 
     function test_upgrade_doesNotAffectNFTCustody() public {
-        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
-        require(tokenIds.length > 0, "MSWhale needs a Milady");
-        uint256 tokenId = tokenIds[0];
+        uint256 tokenId = testTokenId;
+
+        // Unfreeze once while admin still owns governance NFT
+        vm.prank(admin);
+        root.setFreeze(false);
 
         vm.startPrank(MSWhale);
-        IERC721(MILADYSTATION).approve(proxyAddress, tokenId);
-        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, proxyAddress, tokenId);
+        IERC721(testNFT).approve(proxyAddress, tokenId);
+        IERC721(testNFT).safeTransferFrom(MSWhale, proxyAddress, tokenId);
         vm.stopPrank();
 
-        bytes32 nftKey = _getCustodyKey(MSWhale, MILADYSTATION);
+        bytes32 nftKey = _getCustodyKey(MSWhale, testNFT);
         (uint128 userOwnedNft, ) = _splitAmount(root.custody(nftKey));
         assertEq(userOwnedNft, 1);
 
@@ -173,7 +216,7 @@ contract FoundationMetaTest is Test {
 
         vm.expectRevert();
         vm.prank(MSWhale);
-        v2Proxy.requestRescission(MILADYSTATION);
+        v2Proxy.requestRescission(testNFT);
     }
 
     // --- ⛽ Gas Benchmarking Tests ---
@@ -249,13 +292,15 @@ contract FoundationMetaTest is Test {
         root.contribute(PEPE, pepeAmount);
         vm.stopPrank();
 
-        // NFT
-        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
-        require(tokenIds.length > 0, "MSWhale needs a Milady");
-        uint256 tokenId = tokenIds[0];
+        // NFT: need backend commit, so unfreeze first
+        vm.prank(admin);
+        root.setFreeze(false);
+
+        uint256 tokenId = testTokenId;
+        // Ensure marshal operations are allowed so NFT transfer doesn't hit Auth on freeze
         vm.startPrank(MSWhale);
-        IERC721(MILADYSTATION).approve(proxyAddress, tokenId);
-        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, proxyAddress, tokenId);
+        IERC721(testNFT).approve(proxyAddress, tokenId);
+        IERC721(testNFT).safeTransferFrom(MSWhale, proxyAddress, tokenId);
         vm.stopPrank();
 
         uint256 gasStart_eth_rescind = gasleft();
@@ -274,7 +319,7 @@ contract FoundationMetaTest is Test {
         vm.expectRevert();
         uint256 gasStart_nft_rescind = gasleft();
         vm.prank(MSWhale);
-        root.requestRescission(MILADYSTATION);
+        root.requestRescission(testNFT);
         uint256 gasUsed_nft_rescind = gasStart_nft_rescind - gasleft();
         console.log("User rescind NFT (revert expected):", gasUsed_nft_rescind);
     }

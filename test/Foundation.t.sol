@@ -4,9 +4,11 @@ pragma solidity ^0.8.28;
 import "forge-std/Test.sol";
 import "forge-std/console.sol";
 import {Foundation} from "../src/Foundation.sol";
-import {CharteredFund} from "../src/CharteredFund.sol";
+import {CharteredFundImplementation} from "../src/CharteredFundImplementation.sol";
+import {UpgradeableBeacon} from "solady/utils/UpgradeableBeacon.sol";
 import {ERC1967Factory} from "solady/utils/ERC1967Factory.sol";
 import {ERC20} from "solady/tokens/ERC20.sol";
+import {MockERC721} from "./mocks/MockERC721.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {Initializable} from "solady/utils/Initializable.sol";
 import {IFoundation} from "../src/interfaces/IFoundation.sol";
@@ -35,7 +37,13 @@ contract FoundationTest is Test {
 
     address private constant MILADYSTATION = 0xB24BaB1732D34cAD0A7C7035C3539aEC553bF3a0;
     address private constant MSWhale = 0x65ccFF5cFc0E080CdD4bb29BC66A3F71153382a2;
-    uint256 private constant MS_TOKEN_ID = 598; // This may not be owned by MSWhale, we will find one he owns
+
+    address ownerNFT;
+    uint256 ownerTokenId;
+
+    // Secondary NFT used for custody-related NFT tests (to avoid governance-NFT side-effects)
+    address testNFT;
+    uint256 testTokenId;
 
     // --- Events ---
     event FundChartered(address indexed fundAddress, address indexed owner, bytes32 salt);
@@ -54,6 +62,13 @@ contract FoundationTest is Test {
     error TransferFromFailed();
 
     function setUp() public {
+        // Automatically select the mainnet fork defined in foundry.toml.
+        // This removes the need for passing `--fork-url` when running tests.
+        // Ensure your foundry.toml has an entry:
+        // [rpc_endpoints]
+        // mainnet = "${RPC_URL}"
+        uint256 mainnetFork = vm.createSelectFork(vm.rpcUrl("mainnet"));
+
         backend = makeAddr("backend");
         user = makeAddr("user");
         anotherUser = makeAddr("anotherUser");
@@ -65,18 +80,41 @@ contract FoundationTest is Test {
         vm.deal(pepeWhale, 10 ether);
         
         // Deploy implementation and proxy for Foundation
-        address proxy = new ERC1967Factory().deploy(
-            address(new Foundation()),
-            admin
-        );
+        // 1. Deploy CharteredFund implementation and beacon
+        address cfImpl = address(new CharteredFundImplementation());
+        address beacon = address(new UpgradeableBeacon(admin, cfImpl));
+
+        // 2. Pick owner NFT per chain
+        (ownerNFT, ownerTokenId) = _selectOwnerNFT();
+
+        // Deploy implementation and proxy for Foundation
+        address proxy = new ERC1967Factory().deploy(address(new Foundation()), admin);
         root = Foundation(payable(proxy));
         // Call initialize on the proxy
         vm.prank(admin);
-        root.initialize(MILADYSTATION, MS_TOKEN_ID);
+        root.initialize(ownerNFT, ownerTokenId, beacon);
 
-        // Set initial backend
+        // Authorize backend as marshal
         vm.prank(admin);
         root.setMarshal(backend, true);
+
+        // --- Prepare secondary NFT for non-governance tests ---
+        MockERC721 secondary = new MockERC721();
+        secondary.mint(admin, 2);
+        testNFT = address(secondary);
+        testTokenId = 2;
+    }
+
+    function _selectOwnerNFT() internal returns (address nft, uint256 tokenId) {
+        address milady = MILADYSTATION;
+        uint256 id = 598;
+        (bool ok, bytes memory data) = milady.staticcall(abi.encodeWithSelector(0x6352211e, id));
+        if (ok && data.length == 32 && abi.decode(data, (address)) == admin) {
+            return (milady, id);
+        }
+        MockERC721 mock = new MockERC721();
+        mock.mint(admin, 1);
+        return (address(mock), 1);
     }
 
     // --- Helper Functions ---
@@ -98,7 +136,7 @@ contract FoundationTest is Test {
     // --- Admin & Setup ---
     function test_initialState() public view {
         // Tests that the root contract is initialized with the correct owner and that the initial backend is set.
-        assertEq(IERC721(MILADYSTATION).ownerOf(MS_TOKEN_ID), admin, "Admin should be the owner of the NFT");
+        assertEq(IERC721(ownerNFT).ownerOf(ownerTokenId), admin, "Admin should be the owner of the NFT");
         assertTrue(root.isMarshal(backend), "Initial backend should be set");
         assertFalse(root.marshalFrozen(), "Backend operations should be allowed initially");
         assertFalse(root.refund(), "Refund mode should be off initially");
@@ -497,7 +535,7 @@ contract FoundationTest is Test {
 
         assertTrue(root.isCharteredFund(fundAddress), "Fund should be registered in root");
 
-        CharteredFund charteredFund = CharteredFund(payable(fundAddress));
+        CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
         assertEq(charteredFund.owner(), user, "Fund owner should be the user");
         assertEq(address(charteredFund.foundation()), address(root), "Fund should point to the correct root");
     }
@@ -506,16 +544,7 @@ contract FoundationTest is Test {
         bytes32 salt = keccak256("predictable_salt");
         
         // Predict address
-        bytes memory bytecode = type(CharteredFund).creationCode;
-        bytes memory constructorArgs = abi.encode(address(root), user);
-        bytes32 initCodeHash = keccak256(abi.encodePacked(bytecode, constructorArgs));
-        
-        address predictedAddress = address(uint160(uint256(keccak256(abi.encodePacked(
-            bytes1(0xff),
-            address(root),
-            salt,
-            initCodeHash
-        )))));
+        address predictedAddress = root.computeCharterAddress(user, salt);
 
         // Create fund
         vm.prank(backend);
@@ -528,7 +557,7 @@ contract FoundationTest is Test {
         // 1. Create fund
         vm.prank(backend);
         address fundAddress = root.charterFund(user, "salt");
-        CharteredFund charteredFund = CharteredFund(payable(fundAddress));
+        CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
 
         // 2. Contribute PEPE into the fund
         uint256 contributeAmount = 1_000_000e18;
@@ -572,7 +601,7 @@ contract FoundationTest is Test {
 
         // 3. Check custody in the chartered fund for the sender
         bytes32 custodyKey = _getCustodyKey(anotherUser, address(0));
-        (uint128 userOwned, uint128 escrow) = _splitAmount(CharteredFund(payable(fundAddress)).custody(custodyKey));
+        (uint128 userOwned, uint128 escrow) = _splitAmount(CharteredFundImplementation(payable(fundAddress)).custody(custodyKey));
         assertEq(userOwned, contributeAmount, "userOwned balance in fund should be updated");
         assertEq(escrow, 0, "escrow should be 0");
     }
@@ -623,7 +652,7 @@ contract FoundationTest is Test {
         vm.startPrank(backend);
         address fundAddress = root.charterFund(user, "salt");
         vm.stopPrank();
-        CharteredFund charteredFund = CharteredFund(payable(fundAddress));
+        CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
         
         uint256 contributeAmount = 1 ether;
         vm.startPrank(user);
@@ -692,25 +721,23 @@ contract FoundationTest is Test {
     }
 
     function test_nftContribute_updatesCustody_correctly() public {
-        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
-        require(tokenIds.length > 0, "MSWhale does not own any MiladyStation tokens on this fork.");
-        uint256 tokenIdToTransfer = tokenIds[0];
+        uint256 tokenIdToTransfer = ownerTokenId;
 
         // Given: Whale owns a MiladyStation NFT
-        vm.startPrank(MSWhale);
+        vm.startPrank(admin);
         
         // And: Whale approves Foundation to receive NFT
-        IERC721(MILADYSTATION).approve(address(root), tokenIdToTransfer);
+        IERC721(ownerNFT).approve(address(root), tokenIdToTransfer);
 
         // When: Whale safeTransfers NFT to Foundation
         vm.expectEmit(true, true, true, true);
-        emit ContributionRecorded(address(root), MSWhale, MILADYSTATION, 1);
-        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, address(root), tokenIdToTransfer);
+        emit ContributionRecorded(address(root), admin, ownerNFT, 1);
+        IERC721(ownerNFT).safeTransferFrom(admin, address(root), tokenIdToTransfer);
         
         vm.stopPrank();
 
         // Then: custody[whale][miladyStation] increments by 1
-        bytes32 custodyKey = _getCustodyKey(MSWhale, MILADYSTATION);
+        bytes32 custodyKey = _getCustodyKey(admin, ownerNFT);
         (uint128 userOwned, uint128 escrow) = _splitAmount(root.custody(custodyKey));
         
         assertEq(userOwned, 1, "userOwned should be 1");
@@ -718,26 +745,24 @@ contract FoundationTest is Test {
     }
 
     function test_nftContribute_emitsCorrectEvent() public {
-        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
-        require(tokenIds.length > 0, "MSWhale does not own any MiladyStation tokens on this fork.");
-        uint256 tokenIdToTransfer = tokenIds[0];
+        uint256 tokenIdToTransfer = ownerTokenId;
 
-        vm.startPrank(MSWhale);
-        IERC721(MILADYSTATION).approve(address(root), tokenIdToTransfer);
+        vm.startPrank(admin);
+        IERC721(ownerNFT).approve(address(root), tokenIdToTransfer);
 
         // Expect: ContributionRecorded(root, whale, miladyStation, 1)
         vm.expectEmit(true, true, true, true);
-        emit ContributionRecorded(address(root), MSWhale, MILADYSTATION, 1);
+        emit ContributionRecorded(address(root), admin, ownerNFT, 1);
         
         // When: whale safeTransfers tokenId to root
-        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, address(root), tokenIdToTransfer);
+        IERC721(ownerNFT).safeTransferFrom(admin, address(root), tokenIdToTransfer);
         vm.stopPrank();
     }
 
     function test_nftAllocate_movesFromProtocolEscrow() public {
         // Given: Foundation has 1 NFT in protocol escrow.
         // We will directly manipulate storage to set this up, bypassing commit.
-        bytes32 protocolKey = _getCustodyKey(address(root), MILADYSTATION);
+        bytes32 protocolKey = _getCustodyKey(address(root), ownerNFT);
         bytes32 protocolBalance = _packAmount(0, 1); // 0 userOwned, 1 escrow
         vm.store(address(root), keccak256(abi.encode(protocolKey, 0)), protocolBalance);
 
@@ -749,12 +774,12 @@ contract FoundationTest is Test {
         // When: backend allocates the user with 1 NFT escrow
         vm.startPrank(backend);
         vm.expectEmit(true, true, true, true);
-        emit CommitmentConfirmed(address(root), user, MILADYSTATION, 1, 0, "ALLOCATED");
-        root.allocate(user, MILADYSTATION, 1);
+        emit CommitmentConfirmed(address(root), user, ownerNFT, 1, 0, "ALLOCATED");
+        root.allocate(user, ownerNFT, 1);
         vm.stopPrank();
 
         // Then: user's custody shows +1 escrow, protocol's escrow is decremented by 1
-        bytes32 userKey = _getCustodyKey(user, MILADYSTATION);
+        bytes32 userKey = _getCustodyKey(user, ownerNFT);
         (, uint128 userEscrow) = _splitAmount(root.custody(userKey));
         assertEq(userEscrow, 1, "User escrow should be 1");
 
@@ -768,18 +793,16 @@ contract FoundationTest is Test {
         // It is expected to revert for NFTs, as they are considered spent upon contribute.
 
         // Given: user has 1 escrowed NFT
-        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
-        require(tokenIds.length > 0, "MSWhale does not own any MiladyStation tokens for this test.");
-        uint256 tokenId = tokenIds[0];
+        uint256 tokenId = ownerTokenId;
 
         // 1. User contributes NFT
-        vm.startPrank(MSWhale);
-        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, address(root), tokenId);
+        vm.startPrank(admin);
+        IERC721(ownerNFT).safeTransferFrom(admin, address(root), tokenId);
         vm.stopPrank();
 
         // 2. Backend confirms credit to move it to escrow
         vm.startPrank(backend);
-        root.commit(address(root), MSWhale, MILADYSTATION, 1, 0, "commit");
+        root.commit(address(root), admin, ownerNFT, 1, 0, "commit");
         vm.stopPrank();
 
         // 3. When: backend attempts to remit() the NFT
@@ -787,14 +810,14 @@ contract FoundationTest is Test {
         
         // Then: The call reverts because `safeTransfer` is for ERC20s.
         vm.expectRevert(IFoundation.Fail.selector);
-        root.remit(MSWhale, MILADYSTATION, 1, 0, "remit");
+        root.remit(admin, ownerNFT, 1, 0, "remit");
         vm.stopPrank();
 
         // And: NFT is still owned by the vault
-        assertEq(IERC721(MILADYSTATION).ownerOf(tokenId), address(root));
+        assertEq(IERC721(ownerNFT).ownerOf(tokenId), address(root));
         
         // And: user's escrow balance is unchanged
-        bytes32 userKey = _getCustodyKey(MSWhale, MILADYSTATION);
+        bytes32 userKey = _getCustodyKey(admin, ownerNFT);
         (uint128 userOwned, uint128 escrow) = _splitAmount(root.custody(userKey));
         assertEq(userOwned, 0, "User userOwned should be 0");
         assertEq(escrow, 1, "User escrow should still be 1");
@@ -805,28 +828,26 @@ contract FoundationTest is Test {
         // aligning with the "NFTs are good as spent" design choice.
 
         // Given: user safeTransfers NFT to vault
-        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
-        require(tokenIds.length > 0, "MSWhale does not own any MiladyStation tokens for this test.");
-        uint256 tokenId = tokenIds[0];
+        uint256 tokenId = ownerTokenId;
 
         // 1. User contributes NFT
-        vm.startPrank(MSWhale);
-        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, address(root), tokenId);
+        vm.startPrank(admin);
+        IERC721(ownerNFT).safeTransferFrom(admin, address(root), tokenId);
 
         // Check that vault owns the NFT and user has 1 userOwned
-        assertEq(IERC721(MILADYSTATION).ownerOf(tokenId), address(root));
-        bytes32 userKey = _getCustodyKey(MSWhale, MILADYSTATION);
+        assertEq(IERC721(ownerNFT).ownerOf(tokenId), address(root));
+        bytes32 userKey = _getCustodyKey(admin, ownerNFT);
         (uint128 userOwned_before, ) = _splitAmount(root.custody(userKey));
         assertEq(userOwned_before, 1, "User userOwned should be 1 after contribute");
 
         // When: user calls requestRescission()
         // Then: The call reverts because `safeTransfer` is for ERC20s.
         vm.expectRevert(IFoundation.Fail.selector);
-        root.requestRescission(MILADYSTATION);
+        root.requestRescission(ownerNFT);
         vm.stopPrank();
 
         // And: NFT is still owned by the vault
-        assertEq(IERC721(MILADYSTATION).ownerOf(tokenId), address(root));
+        assertEq(IERC721(ownerNFT).ownerOf(tokenId), address(root));
 
         // And: userOwned is unchanged
         (uint128 userOwned_after, uint128 escrow_after) = _splitAmount(root.custody(userKey));
@@ -836,17 +857,15 @@ contract FoundationTest is Test {
 
     function test_nftGlobalUnlock_allowsEscrowRescission() public {
         // Given: user has an escrowed NFT
-        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
-        require(tokenIds.length > 0, "MSWhale does not own any MiladyStation tokens for this test.");
-        uint256 tokenId = tokenIds[0];
+        uint256 tokenId = testTokenId;
 
         // 1. User contributes NFT and backend confirms credit
-        vm.startPrank(MSWhale);
-        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, address(root), tokenId);
+        vm.startPrank(admin);
+        IERC721(testNFT).safeTransferFrom(admin, address(root), tokenId);
         vm.stopPrank();
 
         vm.startPrank(backend);
-        root.commit(address(root), MSWhale, MILADYSTATION, 1, 0, "commit");
+        root.commit(address(root), admin, testNFT, 1, 0, "commit");
         vm.stopPrank();
 
         // And: owner flips isGlobalEscrowUnlocked (refund) = true
@@ -855,18 +874,18 @@ contract FoundationTest is Test {
         assert(root.refund());
 
         // When: user calls requestRescission()
-        vm.startPrank(MSWhale);
+        vm.startPrank(admin);
         // NOTE: The current implementation attempts an ERC20 transfer which will fail.
         // This test documents that even with refund mode on, NFT rescission is broken.
         vm.expectRevert(IFoundation.Fail.selector);
-        root.requestRescission(MILADYSTATION);
+        root.requestRescission(testNFT);
         vm.stopPrank();
 
         // Then: both userOwned and escrowed NFTs are NOT returned
-        assertEq(IERC721(MILADYSTATION).ownerOf(tokenId), address(root));
+        assertEq(IERC721(testNFT).ownerOf(tokenId), address(root));
 
         // And: balances are unchanged
-        bytes32 userKey = _getCustodyKey(MSWhale, MILADYSTATION);
+        bytes32 userKey = _getCustodyKey(admin, testNFT);
         (uint128 userOwned, uint128 escrow) = _splitAmount(root.custody(userKey));
         assertEq(userOwned, 0);
         assertEq(escrow, 1);
@@ -876,18 +895,16 @@ contract FoundationTest is Test {
         // Given: a contract without onERC721Received
         NoReceiver noReceiver = new NoReceiver();
 
-        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
-        require(tokenIds.length > 0, "MSWhale does not own any MiladyStation tokens for this test.");
-        uint256 tokenId = tokenIds[0];
+        uint256 tokenId = ownerTokenId;
 
         // When: NFT is sent to that contract
-        vm.startPrank(MSWhale);
+        vm.startPrank(admin);
 
         // Then: transaction reverts
         // The ERC721 standard requires the recipient of a safe transfer to implement onERC721Received.
         // The revert reason is not standardized, so we just check for a generic revert.
         vm.expectRevert();
-        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, address(noReceiver), tokenId);
+        IERC721(ownerNFT).safeTransferFrom(admin, address(noReceiver), tokenId);
         vm.stopPrank();
     }
 
@@ -899,7 +916,7 @@ contract FoundationTest is Test {
         vm.startPrank(backend);
         address fundAddress = root.charterFund(anotherUser, bytes32(0));
         vm.stopPrank();
-        CharteredFund charteredFund = CharteredFund(payable(fundAddress));
+        CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
 
         // 2. Contribute ETH into CharteredFund
         uint256 contributeAmount = 1 ether;
@@ -933,27 +950,26 @@ contract FoundationTest is Test {
         vm.startPrank(backend);
         address fundAddress = root.charterFund(anotherUser, bytes32(0));
         vm.stopPrank();
-        CharteredFund charteredFund = CharteredFund(payable(fundAddress));
+        CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
 
         // Given: a user owns a Milady NFT
-        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
-        require(tokenIds.length > 0, "MSWhale does not own any MiladyStation tokens for this test.");
-        uint256 tokenId = tokenIds[0];
+        uint256 tokenId = testTokenId;
 
         // And: the user approves the CharteredFund to receive NFTs
-        vm.startPrank(MSWhale);
-        IERC721(MILADYSTATION).approve(address(charteredFund), tokenId);
+        vm.startPrank(admin);
+        IERC721(testNFT).approve(address(charteredFund), tokenId);
 
         // When: the user calls safeTransferFrom() to CharteredFund
         // Then: A single ContributionRecorded event is emitted from Foundation, forwarded by the CharteredFund.
         vm.expectEmit(true, true, true, true);
-        emit ContributionRecorded(fundAddress, MSWhale, MILADYSTATION, 1);
+        emit ContributionRecorded(fundAddress, admin, testNFT, 1);
         
-        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, address(charteredFund), tokenId);
+        vm.startPrank(admin);
+        IERC721(testNFT).safeTransferFrom(admin, fundAddress, tokenId);
         vm.stopPrank();
         
         // Then: custody[user][nftAddress] increments by 1 in the CharteredFund
-        bytes32 userKey = _getCustodyKey(MSWhale, MILADYSTATION);
+        bytes32 userKey = _getCustodyKey(admin, testNFT);
         (uint128 userOwned, uint128 escrow) = _splitAmount(charteredFund.custody(userKey));
         assertEq(userOwned, 1, "CharteredFund userOwned should be 1");
         assertEq(escrow, 0, "CharteredFund escrow should be 0");
@@ -964,10 +980,10 @@ contract FoundationTest is Test {
         vm.prank(backend);
         address fundAddress = root.charterFund(anotherUser, bytes32(0));
         vm.stopPrank();
-        CharteredFund charteredFund = CharteredFund(payable(fundAddress));
+        CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
 
         // 2. Manually set the protocol's escrow balance for the test
-        bytes32 protocolKey = _getCustodyKey(address(charteredFund), MILADYSTATION);
+        bytes32 protocolKey = _getCustodyKey(address(charteredFund), ownerNFT);
         bytes32 protocolBalance = _packAmount(0, 1); // 0 userOwned, 1 escrow
         bytes32 storageSlot = keccak256(abi.encode(protocolKey, 0)); // custody is at slot 0
         vm.store(address(charteredFund), storageSlot, protocolBalance); 
@@ -975,12 +991,12 @@ contract FoundationTest is Test {
         // 3. When backend calls allocate on the CharteredFund for a user.
         vm.startPrank(backend);
         vm.expectEmit(true, true, true, true);
-        emit CommitmentConfirmed(fundAddress, user, MILADYSTATION, 1, 0, "ALLOCATED");
-        charteredFund.allocate(user, MILADYSTATION, 1);
+        emit CommitmentConfirmed(fundAddress, user, ownerNFT, 1, 0, "ALLOCATED");
+        charteredFund.allocate(user, ownerNFT, 1);
         vm.stopPrank();
 
         // Then: user's custody in the fund shows +1 escrow.
-        bytes32 userKey = _getCustodyKey(user, MILADYSTATION);
+        bytes32 userKey = _getCustodyKey(user, ownerNFT);
         (, uint128 userEscrow) = _splitAmount(charteredFund.custody(userKey));
         assertEq(userEscrow, 1, "User escrow in CharteredFund should be 1");
 
@@ -996,19 +1012,17 @@ contract FoundationTest is Test {
         vm.startPrank(backend);
         address fundAddress = root.charterFund(anotherUser, bytes32(0));
         vm.stopPrank();
-        CharteredFund charteredFund = CharteredFund(payable(fundAddress));
+        CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
 
         // 2. User contributes an NFT.
-        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
-        require(tokenIds.length > 0, "No Milady tokens for test.");
-        uint256 tokenId = tokenIds[0];
-        vm.startPrank(MSWhale);
-        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, fundAddress, tokenId);
+        uint256 tokenId = ownerTokenId;
+        vm.startPrank(admin);
+        IERC721(ownerNFT).safeTransferFrom(admin, fundAddress, tokenId);
         vm.stopPrank();
 
         // 3. Backend confirms credit to move NFT to escrow.
         vm.startPrank(backend);
-        charteredFund.commit(fundAddress, MSWhale, MILADYSTATION, 1, 0, 0, "commit");
+        charteredFund.commit(fundAddress, admin, ownerNFT, 1, 0, 0, "commit");
         vm.stopPrank();
 
         // 4. When backend calls remit...
@@ -1016,14 +1030,14 @@ contract FoundationTest is Test {
         
         // Then: The call reverts because `safeTransfer` is for ERC20s.
         vm.expectRevert(IFoundation.Fail.selector);
-        charteredFund.remit(MSWhale, MILADYSTATION, 1, 0, "remit");
+        charteredFund.remit(admin, ownerNFT, 1, 0, "remit");
         vm.stopPrank();
 
         // 5. Then: CharteredFund still owns the NFT.
-        assertEq(IERC721(MILADYSTATION).ownerOf(tokenId), fundAddress, "CharteredFund should own NFT");
+        assertEq(IERC721(ownerNFT).ownerOf(tokenId), fundAddress, "CharteredFund should own NFT");
         
         // And: user's escrow balance is unchanged.
-        bytes32 userKey = _getCustodyKey(MSWhale, MILADYSTATION);
+        bytes32 userKey = _getCustodyKey(admin, ownerNFT);
         (uint128 userOwned, uint128 escrow) = _splitAmount(charteredFund.custody(userKey));
         assertEq(userOwned, 0, "User userOwned should be 0");
         assertEq(escrow, 1, "User escrow should still be 1");
@@ -1036,26 +1050,24 @@ contract FoundationTest is Test {
         vm.startPrank(backend);
         address fundAddress = root.charterFund(anotherUser, bytes32(0));
         vm.stopPrank();
-        CharteredFund charteredFund = CharteredFund(payable(fundAddress));
+        CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
 
         // 2. User contributes an NFT.
-        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
-        require(tokenIds.length > 0, "No Milady tokens for test.");
-        uint256 tokenId = tokenIds[0];
-        vm.startPrank(MSWhale);
-        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, fundAddress, tokenId);
+        uint256 tokenId = ownerTokenId;
+        vm.startPrank(admin);
+        IERC721(ownerNFT).safeTransferFrom(admin, fundAddress, tokenId);
         
         // 3. When user calls requestRescission...
         // Then: The call reverts because `safeTransfer` is for ERC20s.
         vm.expectRevert(IFoundation.Fail.selector);
-        charteredFund.requestRescission(MILADYSTATION);
+        charteredFund.requestRescission(ownerNFT);
         vm.stopPrank();
 
         // 4. Then: CharteredFund still owns the NFT.
-        assertEq(IERC721(MILADYSTATION).ownerOf(tokenId), fundAddress, "CharteredFund should still own NFT");
+        assertEq(IERC721(ownerNFT).ownerOf(tokenId), fundAddress, "CharteredFund should still own NFT");
         
         // And: user's userOwned balance is unchanged.
-        bytes32 userKey = _getCustodyKey(MSWhale, MILADYSTATION);
+        bytes32 userKey = _getCustodyKey(admin, ownerNFT);
         (uint128 userOwned, ) = _splitAmount(charteredFund.custody(userKey));
         assertEq(userOwned, 1, "User userOwned should be 1");
     }
@@ -1067,18 +1079,16 @@ contract FoundationTest is Test {
         vm.startPrank(backend);
         address fundAddress = root.charterFund(anotherUser, bytes32(0));
         vm.stopPrank();
-        CharteredFund charteredFund = CharteredFund(payable(fundAddress));
+        CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
 
-        uint256[] memory tokenIds = IERC721(MILADYSTATION).tokensOfOwner(MSWhale);
-        require(tokenIds.length > 0, "No Milady tokens for test.");
-        uint256 tokenId = tokenIds[0];
+        uint256 tokenId = testTokenId;
         
-        vm.startPrank(MSWhale);
-        IERC721(MILADYSTATION).safeTransferFrom(MSWhale, fundAddress, tokenId);
+        vm.startPrank(admin);
+        IERC721(testNFT).safeTransferFrom(admin, fundAddress, tokenId);
         vm.stopPrank();
 
         vm.startPrank(backend);
-        charteredFund.commit(fundAddress, MSWhale, MILADYSTATION, 1, 0, 0, "commit");
+        charteredFund.commit(fundAddress, admin, testNFT, 1, 0, 0, "commit");
         vm.stopPrank();
 
         // 2. Enable global refund mode.
@@ -1087,17 +1097,17 @@ contract FoundationTest is Test {
         assertTrue(root.refund(), "Refund mode should be on");
 
         // 3. When user calls requestRescission...
-        vm.startPrank(MSWhale);
+        vm.startPrank(admin);
         // Then: The call reverts because `safeTransfer` is for ERC20s.
         vm.expectRevert(IFoundation.Fail.selector);
-        charteredFund.requestRescission(MILADYSTATION);
+        charteredFund.requestRescission(testNFT);
         vm.stopPrank();
 
         // 4. Then: CharteredFund still owns the NFT.
-        assertEq(IERC721(MILADYSTATION).ownerOf(tokenId), fundAddress, "CharteredFund should still own NFT");
+        assertEq(IERC721(testNFT).ownerOf(tokenId), fundAddress, "CharteredFund should still own NFT");
         
         // And: user's escrow balance is unchanged.
-        bytes32 userKey = _getCustodyKey(MSWhale, MILADYSTATION);
+        bytes32 userKey = _getCustodyKey(admin, testNFT);
         (uint128 userOwned, uint128 escrow) = _splitAmount(charteredFund.custody(userKey));
         assertEq(userOwned, 0);
         assertEq(escrow, 1);

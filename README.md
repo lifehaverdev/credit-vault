@@ -63,25 +63,43 @@ The system is primarily designed for fungible assets. The `contribute` -> `commi
 
 ## Deterministic Deployment Across Chains
 
-To guarantee that the **proxy address is identical on every EVM-compatible chain**, we deploy in two deterministic steps.  Only five inputs participate in the CREATE2 address calculation; we lock all of them to constants that we commit to the repo.
+The deployment flow achieves deterministic addresses for **both** layers of the system:  
+• The **Foundation** hub is an *ERC-1967* proxy with its own implementation.  
+• Every **CharteredFund** is an *ERC-1967 **beacon** proxy* that reads its logic from a shared `UpgradeableBeacon`.  
 
-1. **Implementation (CREATE3)**  
-   • Deployer   → the canonical "keyless" CREATE3 deployer address (same on every chain)  
-   • Salt       → `IMPL_SALT` – a vanity-mined `bytes32` we store under version control  
-   • Bytecode   → compiled `Foundation` implementation (no constructor args)  
-   Result: **one implementation address valid on all chains.**
+To guarantee that these addresses are identical on every EVM-compatible chain we deterministically deploy **four** contracts, each governed by a vanity-mined salt or constant.  All salts live in version control so anyone can reproduce the deployment.
 
-2. **Proxy (CREATE2 via 0x…9497 factory)**  
-   • Factory    → `0x0000000000FFe8B47B3e2130213B802212439497` (0age's ImmutableCreate2Factory deployed everywhere)  
-   • Salt       → `PROXY_SALT` – another vanity-mined `bytes32`  
-   • InitCode   → `ERC1967Proxy` constructor bytecode with args:
-     ‑ `implementationAddress` (constant from step-1)
-     ‑ `admin` (the **virgin proxy-deployer wallet**, same address on every chain)  
-   Result: **identical proxy address on every chain.**
+1. **Foundation implementation (CREATE3)**  
+   • Deployer → canonical keyless CREATE3 address (same on every chain)  
+   • Salt     → `IMPL_SALT` – vanity-mined bytes32  
+   • Bytecode → compiled `Foundation` implementation  
+   → **Identical address on every chain**.
 
-3. **Initialize**  
-   After the proxy is created we call `initialize(ownerNFT, ownerTokenId)`.
-   The NFT contract address _may differ per chain_; this does **not** influence determinism because it is stored in proxy storage after deployment.
+2. **CharteredFund implementation (CREATE3)**  
+   • Salt     → `CHARTER_IMPL_SALT`  
+   • Bytecode → compiled `CharteredFundImplementation`  
+   → **Identical address on every chain**.
+
+3. **UpgradeableBeacon (CREATE3)**  
+   • Salt     → `BEACON_SALT`  
+   • Constructor args → `(owner = deployer, implementation = CharteredFundImplementation)`  
+   → Holds the implementation for every `CharteredFund` proxy.
+
+4. **Hub Proxy (CREATE2 via 0x…9497 factory)**  
+   • Factory  → `0x0000000000FFe8B47B3e2130213B802212439497` (ImmutableCreate2Factory)  
+   • Salt     → `PROXY_SALT`  
+   • InitCode → `ERC1967Proxy` constructor with args:
+     ‑ `foundationImplementation` (step-1)  
+     ‑ `abi.encodeWithSelector(Foundation.initialize.selector, ownerNFT, ownerTokenId, beacon)`  
+   → **Identical proxy address everywhere.**
+
+5. **Initialize (done in-constructor)**  
+   The proxy's constructor calldata now passes **three** arguments – `ownerNFT`, `ownerTokenId`, and the `beacon` address – so the hub is fully configured in the same transaction.
+
+### Chartered Fund Deployment (Beacon Proxy)
+The `Foundation` now deploys each `CharteredFund` via `LibClone.deployDeterministicERC1967BeaconProxy`,
+using the shared `UpgradeableBeacon`.  The beacon ownership is transferred to the `Foundation`
+at initialization so upgrades flow through `Foundation.upgradeCharterImplementation()`.
 
 ### Best Practices / Golden Rules
 

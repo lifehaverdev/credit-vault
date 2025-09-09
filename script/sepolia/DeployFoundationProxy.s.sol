@@ -17,6 +17,7 @@ contract DeployFoundationProxy is Script {
         address impl = vm.envAddress("IMPL_ADDRESS");
         address ownerNFT = vm.envAddress("OWNER_NFT");
         uint256 ownerTokenId = vm.envUint("OWNER_TOKEN_ID");
+        address charterBeacon = vm.envAddress("BEACON_ADDRESS");
 
         // ---------------------------------------------------------------------
         // Broadcast transaction (must be nonce-0!)
@@ -29,7 +30,7 @@ contract DeployFoundationProxy is Script {
         console.log("Proxy deployed to:", proxyAddr);
 
         // Initialise the proxy
-        Foundation(payable(proxyAddr)).initialize(ownerNFT, ownerTokenId);
+        Foundation(payable(proxyAddr)).initialize(ownerNFT, ownerTokenId, charterBeacon);
         console.log("Proxy initialised.");
 
         vm.stopBroadcast();

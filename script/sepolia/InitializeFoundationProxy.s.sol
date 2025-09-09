@@ -13,9 +13,10 @@ contract InitializeFoundationProxy is Script {
         address payable proxy = payable(vm.envAddress("PROXY_ADDRESS"));
         address ownerNFT = vm.envAddress("OWNER_NFT");
         uint256 ownerTokenId = vm.envUint("OWNER_TOKEN_ID");
+        address charterBeacon = vm.envAddress("CHARTER_BEACON");
 
         vm.startBroadcast();
-        Foundation(proxy).initialize(ownerNFT, ownerTokenId);
+        Foundation(proxy).initialize(ownerNFT, ownerTokenId, charterBeacon);
         console.log("Proxy initialized at:", proxy);
         vm.stopBroadcast();
     }
