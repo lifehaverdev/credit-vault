@@ -28,64 +28,73 @@ contract VerifyFoundationKeep is Script {
         // ---------------------------------------------------------------------
         // Read env vars
         // ---------------------------------------------------------------------
-        address charterImpl      = vm.envAddress("CHARTER_IMPL");
-        address charterBeacon    = vm.envAddress("CHARTER_BEACON");
-        address foundationImpl   = vm.envAddress("FOUNDATION_IMPL");
-        address foundationProxy  = vm.envAddress("FOUNDATION_PROXY");
-        address deployer         = vm.envAddress("DEPLOYER");
+        address charterImpl   = vm.envOr("CHARTER_IMPL", address(0));
+        address charterBeacon = vm.envOr("CHARTER_BEACON", address(0));
+        address foundationImpl = vm.envOr("FOUNDATION_IMPL", address(0));
+        address foundationProxy = vm.envOr("FOUNDATION_PROXY", address(0));
+        address deployer = vm.envOr("DEPLOYER", address(0));
 
         uint256 chainId = vm.envOr("CHAIN_ID", block.chainid);
 
         console2.log("\n================== Verification Commands ==================");
 
         // CharteredFundImplementation ----------------------------------------------------
-        console2.log("1) CharteredFundImplementation:\n");
-        console2.log(
-            string.concat(
-                "forge verify-contract ",
-                vm.toString(charterImpl),
-                " src/CharteredFundImplementation.sol:CharteredFundImplementation",
-                " --chain-id ", vm.toString(chainId),
-                " --watch"
-            )
-        );
+        if (charterImpl != address(0)) {
+            console2.log("1) CharteredFundImplementation:\n");
+            console2.log(
+                string.concat(
+                    "forge verify-contract ",
+                    vm.toString(charterImpl),
+                    " src/CharteredFundImplementation.sol:CharteredFundImplementation",
+                    " --chain-id ", vm.toString(chainId),
+                    ""
+                )
+            );
+        }
 
         // UpgradeableBeacon ----------------------------------------------------------------
-        console2.log("\n2) UpgradeableBeacon (constructor args: <deployer> <impl>):\n");
-        console2.log(
-            string.concat(
-                "forge verify-contract ",
-                vm.toString(charterBeacon),
-                " solady/utils/UpgradeableBeacon.sol:UpgradeableBeacon ",
-                vm.toString(deployer), " ", vm.toString(charterImpl),
-                " --chain-id ", vm.toString(chainId),
-                " --watch"
-            )
-        );
+        if (charterBeacon != address(0) && charterImpl != address(0) && deployer != address(0)) {
+            console2.log("\n2) UpgradeableBeacon (constructor args auto-encoded):\n");
+            bytes memory ctorArgs = abi.encode(deployer, charterImpl);
+            console2.log(
+                string.concat(
+                    "forge verify-contract ",
+                    vm.toString(charterBeacon),
+                    " lib/solady/src/utils/UpgradeableBeacon.sol:UpgradeableBeacon",
+                    " --constructor-args ", vm.toString(ctorArgs),
+                    " --chain-id ", vm.toString(chainId),
+                    ""
+                )
+            );
+        }
 
         // Foundation implementation --------------------------------------------------------
-        console2.log("\n3) Foundation implementation:\n");
-        console2.log(
-            string.concat(
-                "forge verify-contract ",
-                vm.toString(foundationImpl),
-                " src/Foundation.sol:Foundation",
-                " --chain-id ", vm.toString(chainId),
-                " --watch"
-            )
-        );
+        if (foundationImpl != address(0)) {
+            console2.log("\n3) Foundation implementation:\n");
+            console2.log(
+                string.concat(
+                    "forge verify-contract ",
+                    vm.toString(foundationImpl),
+                    " src/Foundation.sol:Foundation",
+                    " --chain-id ", vm.toString(chainId),
+                    ""
+                )
+            );
+        }
 
         // Foundation proxy -----------------------------------------------------------------
-        console2.log("\n4) Foundation proxy (verify as implementation):\n");
-        console2.log(
-            string.concat(
-                "forge verify-contract ",
-                vm.toString(foundationProxy),
-                " src/Foundation.sol:Foundation",
-                " --chain-id ", vm.toString(chainId),
-                " --watch"
-            )
-        );
+        if (foundationProxy != address(0)) {
+            console2.log("\n4) Foundation proxy (verify as implementation):\n");
+            console2.log(
+                string.concat(
+                    "forge verify-contract ",
+                    vm.toString(foundationProxy),
+                    " src/Foundation.sol:Foundation",
+                    " --chain-id ", vm.toString(chainId),
+                    ""
+                )
+            );
+        }
 
         console2.log("\n===========================================================\n");
     }

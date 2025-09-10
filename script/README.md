@@ -99,6 +99,33 @@ forge script script/2-DeployFoundationKeep.s.sol \
 
 ---
 
+## 2.2 Contract Verification 🕵️‍♂️
+
+After the one-shot deployment you can verify all (or a subset) of the contracts on
+Etherscan / Block-Explorer with one interactive helper:
+
+```bash
+# optional – tweak delay between API polls (default 5s)
+export RATE_WAIT=6
+
+./script/utils/verify.sh
+```
+
+What the helper does:
+
+1. Loads `.env` automatically so API keys like `ETHERSCAN_API_KEY` are available.
+2. Prompts for each deployed address.  Leave any prompt empty to **skip** verifying that contract (useful when it is already verified).
+3. Runs `VerifyFoundationKeep.s.sol`, which prints Forge verification commands only for the non-empty addresses.
+4. Parses those commands and executes them sequentially, pausing `$RATE_WAIT`s between calls to avoid rate-limits.
+
+Flags & tweaks:
+• To use a different chain pass the appropriate chain-id when prompted.
+• Change the sleep interval on the fly with `RATE_WAIT=<seconds>`.
+
+The script is idempotent – already-verified contracts are detected and skipped by Forge.
+
+---
+
 ## 3. Upgrade Procedure
 
 Every chartered fund is a **Beacon proxy**.  Upgrading the beacon updates *all*
