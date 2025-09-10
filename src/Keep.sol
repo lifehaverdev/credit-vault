@@ -32,15 +32,41 @@ abstract contract Keep {
                                 UTILITIES
     //////////////////////////////////////////////////////////////////////////*/
 
-    /// @dev Heuristic check for ERC-721 vs ERC-20. We attempt to call `decimals()` which
-    ///      is expected to exist on well-behaved ERC-20 contracts. If the call reverts or
-    ///      returns no data, we assume the asset is an NFT (or otherwise incompatible
-    ///      with `SafeTransferLib.safeTransfer` semantics).
-    ///      ETH (token == address(0)) is **not** considered an NFT.
+    /// @dev Best-effort check to distinguish ERC-721 / ERC-1155 tokens from fungible ERC-20s.
+    ///
+    /// 1. Attempt ERC-165 `supportsInterface` for the IERC721 interface id (0x80ac58cd) and the
+    ///    IERC1155 interface id (0xd9b67a26).  A return value of `true` reliably identifies an NFT.
+    /// 2. If the contract does not implement ERC-165 (or the call reverts), we fall back to the
+    ///    old `decimals()` heuristic: well-behaved ERC-20s expose `decimals()`, while most NFTs do
+    ///    not.  If `decimals()` is absent or the call reverts we assume the asset is an NFT.
+    ///
+    /// ETH (token == address(0)) is **not** considered an NFT.
     function _isNFT(address token) internal view returns (bool) {
         if (token == address(0)) return false;
-        (bool ok, bytes memory data) = token.staticcall(abi.encodeWithSelector(0x313ce567)); // decimals()
-        return !ok || data.length == 0;
+
+        // --- 1️⃣  ERC-165 probe ----------------------------------------------------
+        bytes4 ERC165_ID = 0x01ffc9a7; // supportsInterface(bytes4)
+        bytes4 ERC721_ID = 0x80ac58cd;
+        bytes4 ERC1155_ID = 0xd9b67a26;
+
+        (bool ok721, bytes memory data721) = token.staticcall(abi.encodeWithSelector(ERC165_ID, ERC721_ID));
+        if (ok721 && data721.length == 32 && abi.decode(data721, (bool))) {
+            return true; // ERC-721 detected
+        }
+
+        (bool ok1155, bytes memory data1155) = token.staticcall(abi.encodeWithSelector(ERC165_ID, ERC1155_ID));
+        if (ok1155 && data1155.length == 32 && abi.decode(data1155, (bool))) {
+            return true; // ERC-1155 detected
+        }
+
+        // --- 2️⃣  Fallback to `decimals()` heuristic ------------------------------
+        (bool okDec, bytes memory dataDec) = token.staticcall(abi.encodeWithSelector(0x313ce567)); // decimals()
+        if (!okDec || dataDec.length == 0) {
+            return true; // No decimals() => likely NFT
+        }
+        // Some contracts implement decimals() for NFTs returning 0. Treat 0 as NFT.
+        uint8 dec = abi.decode(dataDec, (uint8));
+        return dec == 0;
     }
 
     function _getCustodyKey(address user, address token) internal pure returns (bytes32) {

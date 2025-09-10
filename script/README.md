@@ -26,14 +26,9 @@ nonces or constructor arguments.
 | `IMPL_SALT` | Foundation implementation (CREATE3) | vanity/fixed `bytes32` |
 | `CHARTER_IMPL_SALT` | CharteredFund implementation (CREATE3) | vanity/fixed `bytes32` |
 | `BEACON_SALT` | UpgradeableBeacon (CREATE3) | vanity/fixed `bytes32` |
-| `PROXY_SALT` | Foundation hub proxy (ERC-1967) | only input that affects any address |
-| ERC1967Factory | `0x0000000000006396FF2a80c067f99B3d2Ab4Df24` | canonical factory |
-
-Locking these inputs guarantees the **same addresses on every chain**.
-
-> **Call-out:** the hub proxy’s address depends *solely* on `PROXY_SALT`.
-> Implementation bytecode, admin address, calldata, and broadcasting wallet do
-> **not** influence the derived address.
+| `PROXY_SALT` | Foundation hub proxy (raw 32-byte salt; first 21 bytes fixed to `0x00`) | affects all deterministic addresses |
+> **Address formula:** The deployed proxy address is  
+> `CreateX.computeCreate3Address(keccak256(msg.sender || PROXY_SALT), CREATEX_ADDRESS)`
 
 ---
 
@@ -78,7 +73,7 @@ The transaction performs:
 1. Deploy `CharteredFundImplementation` (regular `new`).
 2. Deploy `UpgradeableBeacon` pointing to (1).
 3. Deploy `Foundation` implementation (regular `new`).
-4. Deploy the deterministic **Foundation proxy** via `ERC1967Factory.deployDeterministicAndCall()` and call `initialize()`.
+4. Deploy the deterministic **Foundation proxy** via `CreateX.create3AndCall()` (CREATE3) and call `initialize()`.
 
 Only step 4’s proxy address is deterministic across chains.
 
@@ -86,17 +81,21 @@ Only step 4’s proxy address is deterministic across chains.
 
 ### 2.1 Preview Addresses (dry-run)
 
+_Computation only – no transactions sent_
+
 ```bash
 forge script script/2-DeployFoundationKeep.s.sol \
   --fork-url $SEPOLIA_RPC
 ```
 
-or query the factory directly:
+---
 
-```bash
-cast call 0x0000000000006396FF2a80c067f99B3d2Ab4Df24 \
-  "predictDeterministicAddress(bytes32)" $PROXY_SALT
-```
+### Salt safeguarding logic
+
+* **Raw salt layout:** 20 zero bytes + `0x00` sentinel + 11-byte entropy  
+* **Guarded salt:** `bytes32 guardedSalt = keccak256(abi.encodePacked(msg.sender, rawSalt));`  
+* **Address determinism:** The same `guardedSalt` yields the **same proxy address on every chain** because `CreateX` burns the salt locally after use.  
+* **Derivation formula:** `proxy = CreateX.computeCreate3Address(guardedSalt, CREATEX_ADDRESS)`
 
 ---
 

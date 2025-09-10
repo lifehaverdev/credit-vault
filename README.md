@@ -61,10 +61,10 @@ The system is primarily designed for fungible assets. The `contribute` -> `commi
 - The Admin can enable a global `refund` mode, which allows users to rescind their `escrow` balance. This is an emergency escape hatch for fungible tokens.
 - All actions are transparently logged onchain for audit and dispute resolution.
 
-## Deterministic Deployment (2-step flow)
+## Deterministic Deployment via CreateX (2-step flow)
 
-- **Scope:** *Only the `Foundation` proxy address is deterministic.*  The supporting contracts (`CharteredFundImplementation`, `UpgradeableBeacon`, and the `Foundation` implementation) are deployed normally and therefore do **not** share addresses across chains.
-- **Inputs:** the single vanity-mined `PROXY_SALT`, plus `OWNER_NFT` & `OWNER_TOKEN_ID`.
+- **Scope:** The `Foundation` proxy, beacon, and all implementation contracts are deployed deterministically with **CREATE3** through the canonical CreateX factory (`0xba5E…ba5Ed`).  Locking the salts guarantees the **same addresses on every chain**—no extra contracts to deploy.  
+- **Inputs:** A single vanity-mined `PROXY_SALT` (raw 32-byte value) plus `OWNER_NFT` & `OWNER_TOKEN_ID`. See [script/README.md](script/README.md) for the full environment variable table.
 
 ### 1. Mine your vanity salt
 
@@ -90,16 +90,16 @@ forge script script/2-DeployFoundationKeep.s.sol \
 
 `2-DeployFoundationKeep.s.sol` performs the following inside **one transaction**:
 
-1. Deploy `CharteredFundImplementation` (regular `new`).
+1. Deploy `CharteredFundImplementation` (CREATE3 via CreateX).
 2. Deploy `UpgradeableBeacon`, pointing to (1).
-3. Deploy `Foundation` implementation (regular `new`).
-4. Call `ERC1967Factory.deployDeterministicAndCall()` to deploy the **deterministic hub proxy** and run `initialize()`.
+3. Deploy `Foundation` implementation (CREATE3 via CreateX).
+4. Call `CreateX.create3AndCall()` to deploy the **deterministic hub proxy** and run `initialize()` with your chosen owner NFT.
 
-Because steps 1–3 are ordinary contract creations, their addresses will differ per chain.  Only step 4’s proxy address is chain-agnostic.
+Because **every** component is created through CREATE3, the addresses are identical across chains as long as the salts remain unchanged.
 
-#### Preview proxy address (dry-run)
+#### Preview addresses (dry-run)
 
-You can preview the deterministic proxy address without broadcasting:
+You can preview all deterministic addresses without broadcasting any transaction:
 
 ```bash
 forge script script/2-DeployFoundationKeep.s.sol \
@@ -111,27 +111,14 @@ forge script script/2-DeployFoundationKeep.s.sol \
 ### Best Practices / Golden Rules
 
 • Commit the chosen `PROXY_SALT` to the repo (or env sample) so it never changes accidentally.  
-• A “virgin” deployer wallet is **no longer required**—only the deterministic proxy relies on `CREATE2`, and its address depends solely on the salt.  
-• Verify that the canonical ERC1967 factory (`0x0000…Df24`) exists on the target chain.  
-• Keep compiler version and optimisation settings locked—bytecode drift breaks predictability for the proxy’s init-code hash.
+• A “virgin” deployer wallet is **no longer required**—addresses depend solely on the salts and not on wallet nonces.  
+• No extra contracts to deploy – the canonical CreateX factory (`0xba5E…ba5Ed`) is already live on all major chains.  
+• Keep compiler version and optimisation settings locked—bytecode drift breaks predictability for the init-code hash.
 
 ---
 
 # Technical Details
 - **Proxy:** `Foundation` is an ERC1967 UUPS proxy, upgradeable by the NFT owner.
-- **CREATE2:** `Foundation` and `CharteredFund` contracts can be deployed at deterministic addresses.
+- **CREATE3:** All components are deployed deterministically via CreateX, sharing the same addresses across chains.
 - **Events:**
-  - `FundChartered`, `ContributionRecorded`, `CommitmentConfirmed`, `RemittanceProcessed`, `RescissionRequested`, `ContributionRescinded`, `marshalStatusChanged`, `Liquidation`, `OperatorFreeze`, `RefundChanged`, `Donation`.
-- **Admin/Utility:**
-  - `setmarshal`: Authorizes an address to perform marshal operations.
-  - `setFreeze`: Pauses all marshal operations.
-  - `setRefund`: Enables the global emergency withdrawal mode.
-  - `multicall`: Allows the marshal to atomically execute multiple actions.
-  - `performCalldata`: Allows the admin to perform arbitrary calls, serving as the ultimate asset management tool.
-
-# For Developers
-- See `test/Foundation.t.sol` for a full suite of integration tests covering all flows and limitations.
-- Use the event log as the canonical source of truth for all offchain accounting.
-
-# Summary
-This system provides operational flexibility and on-chain transparency for credit-based applications. It is not a trustless vault; it is an auditable custody solution built on the principle that the protocol's marshal is trusted to manage user assets according to off-chain logic.
+  - `FundChartered`, `

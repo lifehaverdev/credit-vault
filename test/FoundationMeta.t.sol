@@ -8,7 +8,9 @@ import {FoundationV2} from "./mocks/FoundationV2.sol";
 import {CharteredFund} from "../src/CharteredFund.sol";
 import {CharteredFundImplementation} from "../src/CharteredFundImplementation.sol";
 import {UpgradeableBeacon} from "solady/utils/UpgradeableBeacon.sol";
-import {ERC1967Factory} from "solady/utils/ERC1967Factory.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
+import {ICreateX} from "lib/createx-forge/script/ICreateX.sol";
+import {CREATEX_ADDRESS, CREATEX_BYTECODE} from "lib/createx-forge/script/CreateX.d.sol";
 import {ERC20} from "solady/tokens/ERC20.sol";
 import {MockERC721} from "./mocks/MockERC721.sol";
 import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
@@ -34,14 +36,17 @@ contract FoundationMetaTest is Test {
     address internal pepeWhale = 0x4a2C786651229175407d3A2D405d1998bcf40614;
 
     address private constant MILADYSTATION = 0xB24BaB1732D34cAD0A7C7035C3539aEC553bF3a0;
-    address ownerNFT;
-    uint256 ownerTokenId;
+    address ownerNFT = MILADYSTATION;
+    uint256 ownerTokenId = 114;
 
     address testNFT;
     uint256 testTokenId;
     address private constant MSWhale = 0x65ccFF5cFc0E080CdD4bb29BC66A3F71153382a2;
 
     event ContributionRecorded(address indexed fundAddress, address indexed user, address indexed token, uint256 amount);
+
+    // Salt helpers (same logic as Foundation.t.sol)
+    uint88 private constant SALT_SUFFIX = 911;
 
     function setUp() public {
         // Automatically select the mainnet fork defined in foundry.toml.
@@ -61,29 +66,50 @@ contract FoundationMetaTest is Test {
         vm.deal(anotherUser, 10 ether);
         vm.deal(pepeWhale, 10 ether);
         
-        address impl = address(new Foundation());
-
         // Deploy CharteredFund implementation and beacon
         address cfImpl = address(new CharteredFundImplementation());
         address beacon = address(new UpgradeableBeacon(admin, cfImpl));
 
         // 2. Pick owner NFT per chain
         (ownerNFT, ownerTokenId) = _selectOwnerNFT();
+        // Make admin the recognized owner.
+        vm.mockCall(ownerNFT, abi.encodeWithSelector(0x6352211e, ownerTokenId), abi.encode(admin));
 
-        // Deploy implementation and proxy for Foundation
-        address proxy = new ERC1967Factory().deploy(address(new Foundation()), admin);
-        root = Foundation(payable(proxy));
-        proxyAddress = proxy;
-        // Call initialize on the proxy
-        vm.prank(admin);
-        root.initialize(ownerNFT, ownerTokenId, beacon);
+        // -----------------------------------------------------------------
+        // Deploy Foundation proxy through CreateX
+        // -----------------------------------------------------------------
 
-        // Transfer beacon ownership to the Foundation
-        vm.prank(admin);
+        if (CREATEX_ADDRESS.code.length == 0) {
+            vm.etch(CREATEX_ADDRESS, CREATEX_BYTECODE);
+        }
+
+        address impl = address(new Foundation());
+        bytes memory proxyInitCode = LibClone.initCodeERC1967(impl);
+        // Compose raw salt with cross-chain guard (first 20 bytes zero, 21st byte = 0x01) and derive guarded salt/address
+        bytes32 rawSalt = bytes32((uint256(1) << 88) | uint256(uint88(SALT_SUFFIX)));
+        bytes32 guardedSalt = keccak256(abi.encode(block.chainid, rawSalt));
+        address predictedProxy = ICreateX(CREATEX_ADDRESS).computeCreate3Address(guardedSalt, CREATEX_ADDRESS);
+
+        vm.startPrank(admin);
+        ICreateX(CREATEX_ADDRESS).deployCreate3AndInit(
+            rawSalt,
+            proxyInitCode,
+            abi.encodeWithSelector(Foundation.initialize.selector, ownerNFT, ownerTokenId, beacon),
+            ICreateX.Values(0, 0)
+        );
+
+        root = Foundation(payable(predictedProxy));
+        proxyAddress = predictedProxy;
+
+        // Transfer beacon ownership to the Foundation (still in admin prank)
         UpgradeableBeacon(beacon).transferOwnership(address(root));
         
-        vm.prank(admin);
+        // within admin prank: authorize backend then stop prank
         root.setMarshal(backend, true);
+        vm.stopPrank();
+
+        // Clear mocked calls so later NFT ownership checks are real.
+        vm.clearMockedCalls();
 
         // mint secondary NFT
         MockERC721 sec = new MockERC721();
@@ -105,16 +131,8 @@ contract FoundationMetaTest is Test {
         return bytes32(uint256(userOwned) | (uint256(escrow) << 128));
     }
 
-    function _selectOwnerNFT() internal returns (address nft, uint256 tokenId) {
-        address milady = MILADYSTATION;
-        uint256 id = 598;
-        (bool ok, bytes memory data) = milady.staticcall(abi.encodeWithSelector(0x6352211e, id));
-        if (ok && data.length == 32 && abi.decode(data, (address)) == admin) {
-            return (milady, id);
-        }
-        MockERC721 mock = new MockERC721();
-        mock.mint(admin, 1);
-        return (address(mock), 1);
+    function _selectOwnerNFT() internal pure returns (address nft, uint256 tokenId) {
+        return (MILADYSTATION, 598);
     }
 
     // --- 🔄 Upgradeability Tests ---

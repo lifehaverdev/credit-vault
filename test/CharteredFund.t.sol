@@ -108,7 +108,6 @@ contract CharteredFundTest is Test {
 
         vm.startPrank(backend);
         ERC20(PEPE).approve(address(fund), amount);
-
         vm.expectEmit(true, true, true, true);
         emit ContributionRecorded(address(fund), user, PEPE, amount);
         vm.expectEmit(true, true, true, true);
@@ -128,13 +127,14 @@ contract CharteredFundTest is Test {
         uint256 amount = 50_000 * 1e18;
 
         // User contributes
-        vm.prank(PEPE_WHALE);
+        vm.startPrank(PEPE_WHALE);
         ERC20(PEPE).approve(address(fund), amount);
         vm.expectEmit(true, true, true, true);
         emit ContributionRecorded(address(fund), PEPE_WHALE, PEPE, amount);
         vm.expectEmit(true, true, true, true);
         emit ContributionRecorded(address(fund), PEPE_WHALE, PEPE, amount);
         fund.contribute(PEPE, amount);
+        vm.stopPrank();
 
         // custody before
         bytes32 k = _getCustodyKey(PEPE_WHALE, PEPE);
@@ -182,9 +182,10 @@ contract CharteredFundTest is Test {
     /// @notice Backend remits escrowed PEPE from fund to user with fee.
     function test_remit_byBackend() public {
         uint256 amount = 1000 * 1e18;
-        vm.prank(PEPE_WHALE);
+        vm.startPrank(PEPE_WHALE);
         ERC20(PEPE).approve(address(fund), amount);
         fund.contribute(PEPE, amount);
+        vm.stopPrank();
 
         // move all to escrow
         vm.prank(backend);

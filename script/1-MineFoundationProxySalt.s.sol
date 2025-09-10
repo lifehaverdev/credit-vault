@@ -3,8 +3,8 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Script.sol";
 import "forge-std/console.sol";
-import {ERC1967Factory} from "lib/solady/src/utils/ERC1967Factory.sol";
-import {ERC1967FactoryConstants} from "lib/solady/src/utils/ERC1967FactoryConstants.sol";
+import {CREATEX_ADDRESS} from "lib/createx-forge/script/CreateX.d.sol";
+import {ICreateX} from "lib/createx-forge/script/ICreateX.sol";
 
 /// @title MineFoundationProxySalt
 /// @notice Mines a vanity `PROXY_SALT` for deploying the Foundation hub proxy deterministically via
@@ -21,10 +21,45 @@ import {ERC1967FactoryConstants} from "lib/solady/src/utils/ERC1967FactoryConsta
 ///   forge script script/1-MineFoundationProxySalt.s.sol \
 ///     --fork-url $RPC_URL -vvvv
 contract MineFoundationProxySalt is Script {
-    address internal constant DEFAULT_FACTORY = 0x0000000000006396FF2a80c067f99B3d2Ab4Df24;
+    // keccak256 hash of CreateX proxy child bytecode used in CREATE3 address derivation.
+    bytes32 internal constant PROXY_CHILD_BYTECODE_HASH = 0x21c35dbe1b344a2488cf3321d6ce542f8e9f305544ff09e4993a62319a497c1f;
 
+    /// @dev Exact replica of CreateX.computeCreate3Address(salt, deployer)
+    function _computeCreate3(bytes32 salt, address deployer) internal pure returns (address addr) {
+        bytes32 computed;
+        assembly {
+            // Load free memory pointer so we can restore it later
+            let ptr := mload(0x40)
+
+            // ----------------------------------------------------------------
+            // Build the 85-byte preimage in scratch space 0x00..0x60
+            // ----------------------------------------------------------------
+            mstore(0x00, deployer)                     // deployer (20 bytes)
+            mstore8(0x0b, 0xff)                        // 0xff marker
+            mstore(0x20, salt)                         // salt (32 bytes)
+            mstore(0x40, PROXY_CHILD_BYTECODE_HASH)    // proxy child bytecode hash (32 bytes)
+
+            // innerHash = keccak256(0xff ‖ salt ‖ hash) starting at 0x0b for 0x55 bytes
+            mstore(0x14, keccak256(0x0b, 0x55))        // store at 0x14 to reuse buffer
+
+            // Restore free memory pointer (gas-optimisation like in CreateX)
+            mstore(0x40, ptr)
+
+            // Write 0xd694 prefix and 0x01 suffix around innerHash → total slice len 0x17
+            mstore(0x00, 0xd694)
+            mstore8(0x34, 0x01)
+
+            computed := keccak256(0x1e, 0x17)          // final hash
+        }
+        addr = address(uint160(uint256(computed)));
+    }
+
+    /// @notice Run the vanity-salt miner for CreateX / CREATE3.
+    ///         The script searches for a raw salt (last 11 bytes vary) that – after
+    ///         CreateX’s guarded-salt transformation – yields a proxy address with
+    ///         the desired prefix.
     function run() external {
-        address factory = DEFAULT_FACTORY;
+        console.log("CreateX factory:", CREATEX_ADDRESS);
 
         // ------------------------------------------------------------------
         // Target prefix inputs
@@ -80,33 +115,43 @@ contract MineFoundationProxySalt is Script {
         console.log("Target prefix (uint):", target);
         console.log("Digits to match:", digits);
 
-        // Fetch the factory's deterministic init-code hash.  If the factory isn't
-        // deployed on the current chain, fall back to the canonical constant.
-        bytes32 initHash;
-        if (factory.code.length == 0) {
-            initHash = keccak256(ERC1967FactoryConstants.INITCODE);
-            console.log("Factory not found on-chain; using canonical initHash");
-        } else {
-            initHash = ERC1967Factory(factory).initCodeHash();
-        }
-        console.log("Factory initCodeHash:");
-        console.logBytes32(initHash);
-
-        uint256 start = vm.envOr("START", uint256(1_319_000));
-        uint256 end   = vm.envOr("END",   uint256(2_319_000));
+        uint256 start = vm.envOr("START", uint256(628_000*3));
+        uint256 end   = vm.envOr("END",   uint256(628_000*4));
 
         vm.startBroadcast();
         vm.pauseGasMetering();
 
         for (uint256 i = start; i < end; ++i) {
-            bytes32 salt = bytes32(i);
-            address predicted = _computeCreate2(factory, salt, initHash);
+            // Build the 32-byte raw salt where only the lower 88 bits vary.
+            bytes32 rawSalt = bytes32(i);
+
+            // Guard the salt – first 20 bytes = msg.sender, 21st byte = 0x00 (no cross-chain guard).
+            bytes32 guardedSalt = keccak256(abi.encodePacked(uint256(uint160(msg.sender)), rawSalt));
+
+            // Predict the proxy address that CreateX’s CREATE3 deploy will yield –
+            // same formula the on-chain factory uses, but evaluated locally.
+            address predicted = _computeCreate3(guardedSalt, CREATEX_ADDRESS);
+
+            // One-off parity check against the factory’s own helper to catch any drift.
+            if (i == start) {
+                address remote = ICreateX(CREATEX_ADDRESS).computeCreate3Address(guardedSalt, CREATEX_ADDRESS);
+                console.log("Remote predicted:", remote);
+                if (remote != predicted) {
+                    console.log("ERROR: local vs remote mismatch - aborting");
+                    return;
+                }
+            }
+
             if ((uint160(predicted) >> shift) == target) {
-                console.log("!!! Found vanity salt:", i);
+                console.log("!!! Found vanity salt (raw/decimal):", i);
+                console.log("rawSalt:");
+                console.logBytes32(rawSalt);
+                console.log("guardedSalt:");
+                console.logBytes32(guardedSalt);
                 console.log("Predicted proxy address:", predicted);
-                console.logBytes32(salt);
                 break;
             }
+
             if (i % 1000 == 0) console.log("Checked:", i);
         }
 
@@ -114,7 +159,5 @@ contract MineFoundationProxySalt is Script {
         vm.stopBroadcast();
     }
 
-    function _computeCreate2(address deployer, bytes32 salt, bytes32 codeHash) internal pure returns (address addr) {
-        addr = address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), deployer, salt, codeHash)))));
-    }
+    // No helper needed – prediction is delegated to the on-chain CreateX helper.
 }

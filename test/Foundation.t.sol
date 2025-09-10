@@ -6,7 +6,9 @@ import "forge-std/console.sol";
 import {Foundation} from "../src/Foundation.sol";
 import {CharteredFundImplementation} from "../src/CharteredFundImplementation.sol";
 import {UpgradeableBeacon} from "solady/utils/UpgradeableBeacon.sol";
-import {ERC1967Factory} from "solady/utils/ERC1967Factory.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
+import {ICreateX} from "lib/createx-forge/script/ICreateX.sol";
+import {CREATEX_ADDRESS, CREATEX_BYTECODE} from "lib/createx-forge/script/CreateX.d.sol";
 import {ERC20} from "solady/tokens/ERC20.sol";
 import {MockERC721} from "./mocks/MockERC721.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
@@ -61,6 +63,10 @@ contract FoundationTest is Test {
     error TransferFailed();
     error TransferFromFailed();
 
+    // --- Salt helpers --------------------------------------------------
+    // 88-bit entropy suffix for deterministic but test-stable address.
+    uint88 private constant SALT_SUFFIX = 911;
+
     function setUp() public {
         // Automatically select the mainnet fork defined in foundry.toml.
         // This removes the need for passing `--fork-url` when running tests.
@@ -86,17 +92,49 @@ contract FoundationTest is Test {
 
         // 2. Pick owner NFT per chain
         (ownerNFT, ownerTokenId) = _selectOwnerNFT();
+        // Ensure `admin` is recognized as the NFT owner for authorization checks.
+        vm.mockCall(ownerNFT, abi.encodeWithSelector(0x6352211e, ownerTokenId), abi.encode(admin));
 
-        // Deploy implementation and proxy for Foundation
-        address proxy = new ERC1967Factory().deploy(address(new Foundation()), admin);
-        root = Foundation(payable(proxy));
-        // Call initialize on the proxy
-        vm.prank(admin);
-        root.initialize(ownerNFT, ownerTokenId, beacon);
+        // ---------------------------------------------------------------------
+        // Deploy Foundation proxy deterministically via CreateX (CREATE3)
+        // ---------------------------------------------------------------------
 
-        // Authorize backend as marshal
-        vm.prank(admin);
+        // 1. Ensure the CreateX factory is present.
+        if (CREATEX_ADDRESS.code.length == 0) {
+            vm.etch(CREATEX_ADDRESS, CREATEX_BYTECODE);
+        }
+
+        // 2. Deploy Foundation implementation contract.
+        address impl = address(new Foundation());
+
+        // 3. Prepare proxy init code embedding the implementation address.
+        bytes memory proxyInitCode = LibClone.initCodeERC1967(impl);
+
+        // 4. Compose raw salt: first 20 bytes all zero, byte-21 set to 0x01, and append entropy.
+        bytes32 rawSalt = bytes32((uint256(1) << 88) | uint256(uint88(SALT_SUFFIX)));
+
+        // 5. Derive guarded salt according to CreateX cross-chain rule.
+        bytes32 guardedSalt = keccak256(abi.encode(block.chainid, rawSalt));
+
+        // 6. Predict the proxy address.
+        address predictedProxy = ICreateX(CREATEX_ADDRESS).computeCreate3Address(guardedSalt, CREATEX_ADDRESS);
+
+        // 7. Deploy proxy and immediately call initialize() in a single tx (keep admin context for subsequent calls).
+        vm.startPrank(admin);
+        ICreateX(CREATEX_ADDRESS).deployCreate3AndInit(
+            rawSalt,
+            proxyInitCode,
+            abi.encodeWithSelector(Foundation.initialize.selector, ownerNFT, ownerTokenId, beacon),
+            ICreateX.Values(0, 0)
+        );
+
+        // 8. Load the freshly deployed proxy as our test subject.
+        root = Foundation(payable(predictedProxy));
+
+        // 9. Authorize backend as marshal (same as before).
+        // within the admin prank: authorize backend then stop prank.
         root.setMarshal(backend, true);
+        vm.stopPrank();
 
         // --- Prepare secondary NFT for non-governance tests ---
         MockERC721 secondary = new MockERC721();
@@ -105,16 +143,9 @@ contract FoundationTest is Test {
         testTokenId = 2;
     }
 
-    function _selectOwnerNFT() internal returns (address nft, uint256 tokenId) {
-        address milady = MILADYSTATION;
-        uint256 id = 598;
-        (bool ok, bytes memory data) = milady.staticcall(abi.encodeWithSelector(0x6352211e, id));
-        if (ok && data.length == 32 && abi.decode(data, (address)) == admin) {
-            return (milady, id);
-        }
-        MockERC721 mock = new MockERC721();
-        mock.mint(admin, 1);
-        return (address(mock), 1);
+    /// @dev Returns the canonical MiladyStation NFT and hard-coded tokenId 598, assumed to be owned by `admin` on mainnet.
+    function _selectOwnerNFT() internal pure returns (address nft, uint256 tokenId) {
+        return (MILADYSTATION, 598);
     }
 
     // --- Helper Functions ---
@@ -805,6 +836,9 @@ contract FoundationTest is Test {
         root.commit(address(root), admin, ownerNFT, 1, 0, "commit");
         vm.stopPrank();
 
+        // Ensure subsequent ownerOf checks are not impacted by earlier mocks
+        vm.clearMockedCalls();
+
         // 3. When: backend attempts to remit() the NFT
         vm.startPrank(backend);
         
@@ -828,26 +862,29 @@ contract FoundationTest is Test {
         // aligning with the "NFTs are good as spent" design choice.
 
         // Given: user safeTransfers NFT to vault
-        uint256 tokenId = ownerTokenId;
+        uint256 tokenId = testTokenId;
 
         // 1. User contributes NFT
         vm.startPrank(admin);
-        IERC721(ownerNFT).safeTransferFrom(admin, address(root), tokenId);
+        IERC721(testNFT).safeTransferFrom(admin, address(root), tokenId);
 
         // Check that vault owns the NFT and user has 1 userOwned
-        assertEq(IERC721(ownerNFT).ownerOf(tokenId), address(root));
-        bytes32 userKey = _getCustodyKey(admin, ownerNFT);
+        assertEq(IERC721(testNFT).ownerOf(tokenId), address(root));
+        bytes32 userKey = _getCustodyKey(admin, testNFT);
         (uint128 userOwned_before, ) = _splitAmount(root.custody(userKey));
         assertEq(userOwned_before, 1, "User userOwned should be 1 after contribute");
+
+        // Ensure subsequent ownerOf checks are not impacted by earlier mocks
+        vm.clearMockedCalls();
 
         // When: user calls requestRescission()
         // Then: The call reverts because `safeTransfer` is for ERC20s.
         vm.expectRevert(IFoundation.Fail.selector);
-        root.requestRescission(ownerNFT);
+        root.requestRescission(testNFT);
         vm.stopPrank();
 
         // And: NFT is still owned by the vault
-        assertEq(IERC721(ownerNFT).ownerOf(tokenId), address(root));
+        assertEq(IERC721(testNFT).ownerOf(tokenId), address(root));
 
         // And: userOwned is unchanged
         (uint128 userOwned_after, uint128 escrow_after) = _splitAmount(root.custody(userKey));
@@ -1014,15 +1051,15 @@ contract FoundationTest is Test {
         vm.stopPrank();
         CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
 
-        // 2. User contributes an NFT.
-        uint256 tokenId = ownerTokenId;
+        // 2. User contributes an NFT (non-governance).
+        uint256 tokenId = testTokenId;
         vm.startPrank(admin);
-        IERC721(ownerNFT).safeTransferFrom(admin, fundAddress, tokenId);
+        IERC721(testNFT).safeTransferFrom(admin, fundAddress, tokenId);
         vm.stopPrank();
 
         // 3. Backend confirms credit to move NFT to escrow.
         vm.startPrank(backend);
-        charteredFund.commit(fundAddress, admin, ownerNFT, 1, 0, 0, "commit");
+        charteredFund.commit(fundAddress, admin, testNFT, 1, 0, 0, "commit");
         vm.stopPrank();
 
         // 4. When backend calls remit...
@@ -1030,14 +1067,14 @@ contract FoundationTest is Test {
         
         // Then: The call reverts because `safeTransfer` is for ERC20s.
         vm.expectRevert(IFoundation.Fail.selector);
-        charteredFund.remit(admin, ownerNFT, 1, 0, "remit");
+        charteredFund.remit(admin, testNFT, 1, 0, "remit");
         vm.stopPrank();
 
         // 5. Then: CharteredFund still owns the NFT.
-        assertEq(IERC721(ownerNFT).ownerOf(tokenId), fundAddress, "CharteredFund should own NFT");
+        assertEq(IERC721(testNFT).ownerOf(tokenId), fundAddress, "CharteredFund should own NFT");
         
         // And: user's escrow balance is unchanged.
-        bytes32 userKey = _getCustodyKey(admin, ownerNFT);
+        bytes32 userKey = _getCustodyKey(admin, testNFT);
         (uint128 userOwned, uint128 escrow) = _splitAmount(charteredFund.custody(userKey));
         assertEq(userOwned, 0, "User userOwned should be 0");
         assertEq(escrow, 1, "User escrow should still be 1");
@@ -1052,22 +1089,22 @@ contract FoundationTest is Test {
         vm.stopPrank();
         CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
 
-        // 2. User contributes an NFT.
-        uint256 tokenId = ownerTokenId;
+        // 2. User contributes an NFT (non-governance).
+        uint256 tokenId = testTokenId;
         vm.startPrank(admin);
-        IERC721(ownerNFT).safeTransferFrom(admin, fundAddress, tokenId);
+        IERC721(testNFT).safeTransferFrom(admin, fundAddress, tokenId);
         
         // 3. When user calls requestRescission...
         // Then: The call reverts because `safeTransfer` is for ERC20s.
         vm.expectRevert(IFoundation.Fail.selector);
-        charteredFund.requestRescission(ownerNFT);
+        charteredFund.requestRescission(testNFT);
         vm.stopPrank();
 
         // 4. Then: CharteredFund still owns the NFT.
-        assertEq(IERC721(ownerNFT).ownerOf(tokenId), fundAddress, "CharteredFund should still own NFT");
+        assertEq(IERC721(testNFT).ownerOf(tokenId), fundAddress, "CharteredFund should still own NFT");
         
         // And: user's userOwned balance is unchanged.
-        bytes32 userKey = _getCustodyKey(admin, ownerNFT);
+        bytes32 userKey = _getCustodyKey(admin, testNFT);
         (uint128 userOwned, ) = _splitAmount(charteredFund.custody(userKey));
         assertEq(userOwned, 1, "User userOwned should be 1");
     }

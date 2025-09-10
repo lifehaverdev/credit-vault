@@ -4,9 +4,14 @@ pragma solidity ^0.8.20;
 import "forge-std/Script.sol";
 import "forge-std/console2.sol";
 import {UpgradeableBeacon} from "solady/utils/UpgradeableBeacon.sol";
-import {ERC1967Factory} from "solady/utils/ERC1967Factory.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
+import {ICreateX} from "lib/createx-forge/script/ICreateX.sol";
+import {CREATEX_ADDRESS} from "lib/createx-forge/script/CreateX.d.sol";
 import {Foundation} from "src/Foundation.sol";
 import {CharteredFundImplementation} from "src/CharteredFundImplementation.sol";
+
+// Canonical CreateX instance
+ICreateX constant CreateX = ICreateX(CREATEX_ADDRESS);
 
 /// @title DeployFoundationKeep
 /// @notice Deploys the entire Charter infrastructure deterministically in **one transaction**.
@@ -27,9 +32,6 @@ import {CharteredFundImplementation} from "src/CharteredFundImplementation.sol";
 ///   forge script script/2-DeployFoundationKeep.s.sol \
 ///     --fork-url $RPC_URL --broadcast --sender $DEPLOYER -vvvv
 contract DeployFoundationKeep is Script {
-    // Canonical ERC1967Factory address on most networks.
-    address internal constant DEFAULT_FACTORY = 0x0000000000006396FF2a80c067f99B3d2Ab4Df24;
-
     struct DeployAddrs {
         address charterImpl;
         address charterBeacon;
@@ -43,8 +45,7 @@ contract DeployFoundationKeep is Script {
         // ---------------------------------------------------------------------
         bytes32 proxySalt      = vm.envBytes32("PROXY_SALT");
         console2.logBytes32(proxySalt);
-        // ERC1967Factory address (optional override)
-        address factoryAddr    = vm.envOr("FACTORY", DEFAULT_FACTORY);
+        // We need the deployer's EOA for permissioned-guard. Compute after broadcast starts so msg.sender is correct.
 
         // ---------------------------------------------------------------------
         // Owner NFT settings (chain-aware defaults)
@@ -61,10 +62,9 @@ contract DeployFoundationKeep is Script {
         console2.log("Owner NFT:", ownerNFT);
         console2.log("Owner tokenId:", ownerTokenId);
 
-        ERC1967Factory factory = ERC1967Factory(factoryAddr);
-        address predictedProxy = factory.predictDeterministicAddress(proxySalt);
-
+        // ---------------------------------------------------------------------
         // Deploy contracts
+        // ---------------------------------------------------------------------
         address charterImpl = address(new CharteredFundImplementation());
         address charterBeacon = address(new UpgradeableBeacon(msg.sender, charterImpl));
         address foundationImpl = address(new Foundation());
@@ -72,17 +72,30 @@ contract DeployFoundationKeep is Script {
         console2.log("CharteredFundImplementation:", charterImpl);
         console2.log("UpgradeableBeacon:", charterBeacon);
         console2.log("Foundation implementation:", foundationImpl);
-        console2.log("Foundation proxy:", predictedProxy);
 
-        // Broadcast deployments
+        // ---------------------------------------------------------------------
+        // Start broadcast to get correct msg.sender (deployer EOA)
+        // ---------------------------------------------------------------------
+
         vm.startBroadcast();
 
-        // Deploy the proxy via factory, initializing it to point to the new beacon
-        factory.deployDeterministicAndCall(
-            foundationImpl,
-            msg.sender,
+        bytes32 guardedSalt = keccak256(abi.encodePacked(uint256(uint160(msg.sender)), proxySalt));
+        address predictedProxy = CreateX.computeCreate3Address(guardedSalt, CREATEX_ADDRESS);
+
+        console2.log("Foundation proxy (predicted):", predictedProxy);
+
+        // Deploy proxy via CreateX / CREATE3 with initialization data
+        bytes memory initCode = LibClone.initCodeERC1967(foundationImpl);
+        CreateX.deployCreate3AndInit(
             proxySalt,
-            abi.encodeWithSelector(Foundation.initialize.selector, ownerNFT, ownerTokenId, charterBeacon)
+            initCode,
+            abi.encodeWithSelector(
+                Foundation.initialize.selector,
+                ownerNFT,
+                ownerTokenId,
+                charterBeacon
+            ),
+            ICreateX.Values(0, 0)
         );
 
         vm.stopBroadcast();

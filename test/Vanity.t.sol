@@ -1,126 +1,134 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// @title ProxyDeterminismTest
-/// @notice Demonstrates that for `ERC1967Factory.deployDeterministicAndCall`,
-///         the proxy address depends **only** on `factory` + `salt`.
-///         Implementation address, admin address, caller address / nonce, and
-///         `initialize()` calldata are all written *after* deployment and do
-///         not affect the CREATE2 address (it is
-///         `keccak256(0xff‖factory‖salt‖factory.initCodeHash())[12:]`).
-
 import "forge-std/Test.sol";
-import {ERC1967Factory} from "lib/solady/src/utils/ERC1967Factory.sol";
+import {ICreateX} from "lib/createx-forge/script/ICreateX.sol";
+import {CREATEX_ADDRESS, CREATEX_BYTECODE} from "lib/createx-forge/script/CreateX.d.sol";
 
-// Simple empty contract to act as dummy implementation target.
-contract Dummy {}
+// -----------------------------------------------------------------------------
+//                              DUMMY CONTRACTS
+// -----------------------------------------------------------------------------
 
-// Implementation that accepts an arbitrary uint256 via foo to allow non-empty
-// init calldata without reverting.
-contract DummyWithFoo {
+contract Dummy {
     function foo(uint256) external {}
 }
 
-contract ProxyDeterminismTest is Test {
-    /* --------------------------------------------------------------------- */
-    /*                               SETTINGS                                */
-    /* --------------------------------------------------------------------- */
+contract DummyWithFoo {
+    function foo(uint256) external {}
+    function bar() external {}
+}
 
-    bytes32 internal constant SALT = bytes32(uint256(123456)); // top-96-bits == 0
+/// @title CreateXDeterminismTest
+/// @notice Demonstrates that for the project’s guarded-salt CREATE3 workflow,
+///         the deployed address depends **only** on `factory` + `salt`.
+///         Implementation bytecode, init calldata, caller address, and its
+///         nonce are written *after* deployment and therefore do **not** affect
+///         the CREATE3 address.
+contract CreateXDeterminismTest is Test {
+    /* ------------------------------------------------------------------------ */
+    /*                               CONSTANTS                                  */
+    /* ------------------------------------------------------------------------ */
 
-    // Deploy a fresh factory for an isolated playground.
-    ERC1967Factory internal factory;
+    // Raw user-supplied salt (fits within the allowed 88-bit range).
+    bytes32 internal constant RAW_SALT = bytes32(uint256(123456));
 
-    // Dummy implementation instances created during tests.
+    // Cached interface to the on-chain CreateX factory.
+    ICreateX internal constant _createx = ICreateX(CREATEX_ADDRESS);
+
+    /* ------------------------------------------------------------------------ */
+    /*                                   SETUP                                  */
+    /* ------------------------------------------------------------------------ */
 
     function setUp() public {
-        factory = new ERC1967Factory();
+        // Select the default fork (mainnet) from foundry.toml rpc_endpoints.
+        vm.createSelectFork(vm.rpcUrl("mainnet"));
+
+        // Ensure the CreateX factory bytecode is present on this fork.
+        if (CREATEX_ADDRESS.code.length == 0) {
+            vm.etch(CREATEX_ADDRESS, CREATEX_BYTECODE);
+        }
     }
 
-    /* --------------------------------------------------------------------- */
-    /*                               INTERNALS                                */
-    /* --------------------------------------------------------------------- */
+    /* ------------------------------------------------------------------------ */
+    /*                               INTERNALS                                  */
+    /* ------------------------------------------------------------------------ */
 
+    /// @dev Computes the guarded salt as specified by the deployment mode.
+    function _guardedSalt() internal pure returns (bytes32) {
+        // For a rawSalt with first 20 bytes == 0 and 21st byte == 0x00 (no extra guard flags),
+        // CreateX._guard hashes the salt directly (see CreateX.sol::_guard fall-back branch).
+        return keccak256(abi.encode(RAW_SALT));
+    }
+
+    /// @dev Predicts the CREATE3 address for the given guarded salt.
     function _predict() internal view returns (address) {
-        return factory.predictDeterministicAddress(SALT);
+        return _createx.computeCreate3Address(_guardedSalt(), CREATEX_ADDRESS);
     }
 
-    function _deploy(
-        address implementation,
-        address admin,
-        bytes memory initCalldata,
-        address caller
-    ) internal returns (address deployed) {
+    /// @dev Deploys a contract through CreateX using the RAW_SALT.  The VM
+    ///      state is reverted afterwards so the same salt can be reused.
+    function _deploy(bytes memory initCode, bytes memory initData, address caller) internal returns (address deployed) {
         uint256 snap = vm.snapshot();
         vm.startPrank(caller);
-        deployed = address(factory.deployDeterministicAndCall(implementation, admin, SALT, initCalldata));
+        deployed = _createx.deployCreate3AndInit(RAW_SALT, initCode, initData, ICreateX.Values(0, 0));
         vm.stopPrank();
-        vm.revertTo(snap); // Rewind so we can reuse the `salt` in later cases.
+        vm.revertTo(snap);
     }
 
-    /* --------------------------------------------------------------------- */
-    /*                                 TESTS                                  */
-    /* --------------------------------------------------------------------- */
+    /* ------------------------------------------------------------------------ */
+    /*                                   TESTS                                  */
+    /* ------------------------------------------------------------------------ */
 
-    /// @notice Proxy address is independent of implementation address.
+    /// @notice Deployed address is independent of implementation bytecode.
     function test_ImplementationIrrelevant() external {
-        address impl1 = address(new Dummy());
-        address impl2 = address(new Dummy());
+        bytes memory codeA = type(Dummy).creationCode;
+        bytes memory codeB = type(DummyWithFoo).creationCode;
 
         address predicted = _predict();
 
-        address dep1 = _deploy(impl1, address(0xA1), new bytes(0), address(0xBEEF));
-        assertEq(dep1, predicted, "deployment 1 mismatch");
+        bytes memory init = abi.encodeWithSignature("foo(uint256)", 1);
 
-        address dep2 = _deploy(impl2, address(0xA1), new bytes(0), address(0xBEEF));
-        assertEq(dep2, predicted, "deployment 2 mismatch");
+        address depA = _deploy(codeA, init, address(0xBEEF));
+        assertEq(depA, predicted, "deployment A mismatch");
+
+        address depB = _deploy(codeB, init, address(0xBEEF));
+        assertEq(depB, predicted, "deployment B mismatch");
     }
 
-    /// @notice Proxy address is independent of initialize calldata.
+    /// @notice Deployed address is independent of initialise calldata.
     function test_CalldataIrrelevant() external {
-        address impl = address(new DummyWithFoo());
+        bytes memory code = type(DummyWithFoo).creationCode;
         address predicted = _predict();
 
-        bytes memory initA = new bytes(0);
+        bytes memory initA = abi.encodeWithSignature("foo(uint256)", 1);
         bytes memory initB = abi.encodeWithSignature("foo(uint256)", 42);
 
-        address depA = _deploy(impl, address(0xA1), initA, address(0xBEEF));
+        address depA = _deploy(code, initA, address(0xBEEF));
         assertEq(depA, predicted, "deploy A mismatch");
 
-        address depB = _deploy(impl, address(0xA1), initB, address(0xBEEF));
+        address depB = _deploy(code, initB, address(0xBEEF));
         assertEq(depB, predicted, "deploy B mismatch");
     }
 
-    /// @notice Proxy address is independent of admin address.
-    function test_AdminIrrelevant() external {
-        address impl = address(new Dummy());
-        address predicted = _predict();
-
-        address depA = _deploy(impl, address(0xA1), new bytes(0), address(0xBEEF));
-        assertEq(depA, predicted, "admin A mismatch");
-
-        address depB = _deploy(impl, address(0xA2), new bytes(0), address(0xBEEF));
-        assertEq(depB, predicted, "admin B mismatch");
-    }
-
-    /// @notice Proxy address is independent of the caller address and its nonce.
+    /// @notice Deployed address is independent of caller address and its nonce.
     function test_CallerAndNonceIrrelevant() external {
-        address impl = address(new Dummy());
+        bytes memory code = type(Dummy).creationCode;
         address predicted = _predict();
 
         // Caller #1 at nonce-0.
-        address dep1 = _deploy(impl, address(0xA1), new bytes(0), address(0xCAFE));
+        bytes memory init = abi.encodeWithSignature("foo(uint256)", 1);
+        address dep1 = _deploy(code, init, address(0xCAFE));
         assertEq(dep1, predicted, "caller 1 mismatch");
 
-        // Caller #2 perform some random txs to bump its nonce, then deploy.
+        // Caller #2 bumps its nonce with dummy txs then deploys.
         address caller2 = address(0xDEAD);
         vm.deal(caller2, 1 ether);
         vm.prank(caller2);
-        payable(caller2).transfer(0); // dummy tx increments nonce
+        payable(caller2).transfer(0);
         vm.prank(caller2);
         payable(caller2).transfer(0);
 
-        address dep2 = _deploy(impl, address(0xA1), new bytes(0), caller2);
+        address dep2 = _deploy(code, init, caller2);
         assertEq(dep2, predicted, "caller 2 mismatch");
     }
 }
