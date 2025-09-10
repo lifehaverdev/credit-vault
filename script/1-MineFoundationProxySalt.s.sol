@@ -115,15 +115,27 @@ contract MineFoundationProxySalt is Script {
         console.log("Target prefix (uint):", target);
         console.log("Digits to match:", digits);
 
-        uint256 start = vm.envOr("START", uint256(628_000*3));
-        uint256 end   = vm.envOr("END",   uint256(628_000*4));
+        uint256 start = vm.envOr("START", uint256(628_000*2));
+        uint256 end   = vm.envOr("END",   uint256(628_000*3));
 
         vm.startBroadcast();
         vm.pauseGasMetering();
 
         for (uint256 i = start; i < end; ++i) {
-            // Build the 32-byte raw salt where only the lower 88 bits vary.
-            bytes32 rawSalt = bytes32(i);
+            // Build the 32-byte raw salt expected by CreateX permission-guard:
+            //  ‖ first 20 bytes  = deployer (EOA) address         ‖
+            //  ‖ 21st byte       = 0x00 (no cross-chain flag)     ‖
+            //  ‖ last 11 bytes   = mined entropy (i)              ‖
+
+            bytes32 prefix = bytes32(uint256(uint160(msg.sender)) << 96); // deployer in the first 20 bytes
+
+            // Ensure the entropy fits into 88 bits (last 11 bytes)
+            require(i < (1 << 88), "i too large");
+
+            bytes32 suffix = bytes32(uint256(i)); // lower 88 bits filled
+
+            // rawSalt = deployer << 96  | entropy (88 bits)
+            bytes32 rawSalt = prefix | suffix;
 
             // Guard the salt – first 20 bytes = msg.sender, 21st byte = 0x00 (no cross-chain guard).
             bytes32 guardedSalt = keccak256(abi.encodePacked(uint256(uint160(msg.sender)), rawSalt));

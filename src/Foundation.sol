@@ -124,15 +124,6 @@ contract Foundation is Keep, UUPSUpgradeable, Initializable, ReentrancyGuard {
         _;
     }
     
-    /*
-      ____
-     /\\___\\  /// HELPER FUNCTIONS ///
-    /\\ \\___\\
-    \\ \\/ / /
-     \\/_/_/ 
-
-    */
-    // helper functions now reside in Keep
 
     /*
        ______

@@ -65,6 +65,17 @@ contract DeployFoundationKeep is Script {
         // ---------------------------------------------------------------------
         // Deploy contracts
         // ---------------------------------------------------------------------
+        // (moved into broadcast section)
+
+        // ---------------------------------------------------------------------
+        // Start broadcast to get correct msg.sender (deployer EOA)
+        // ---------------------------------------------------------------------
+
+        vm.startBroadcast();
+
+        // ---------------------------------------------------------------------
+        // Deploy contracts on-chain (after broadcast so msg.sender is deployer)
+        // ---------------------------------------------------------------------
         address charterImpl = address(new CharteredFundImplementation());
         address charterBeacon = address(new UpgradeableBeacon(msg.sender, charterImpl));
         address foundationImpl = address(new Foundation());
@@ -73,21 +84,18 @@ contract DeployFoundationKeep is Script {
         console2.log("UpgradeableBeacon:", charterBeacon);
         console2.log("Foundation implementation:", foundationImpl);
 
-        // ---------------------------------------------------------------------
-        // Start broadcast to get correct msg.sender (deployer EOA)
-        // ---------------------------------------------------------------------
+        bytes32 rawSalt = proxySalt; // raw salt mined by script 1
 
-        vm.startBroadcast();
-
-        bytes32 guardedSalt = keccak256(abi.encodePacked(uint256(uint160(msg.sender)), proxySalt));
+        // Recompute the guarded salt the same way CreateX will (permissioned deploy, no cross-chain flag)
+        bytes32 guardedSalt = keccak256(abi.encodePacked(uint256(uint160(msg.sender)), rawSalt));
         address predictedProxy = CreateX.computeCreate3Address(guardedSalt, CREATEX_ADDRESS);
 
         console2.log("Foundation proxy (predicted):", predictedProxy);
 
         // Deploy proxy via CreateX / CREATE3 with initialization data
         bytes memory initCode = LibClone.initCodeERC1967(foundationImpl);
-        CreateX.deployCreate3AndInit(
-            proxySalt,
+        address deployedProxy = CreateX.deployCreate3AndInit(
+            rawSalt,
             initCode,
             abi.encodeWithSelector(
                 Foundation.initialize.selector,
@@ -97,6 +105,8 @@ contract DeployFoundationKeep is Script {
             ),
             ICreateX.Values(0, 0)
         );
+
+        console2.log("Foundation proxy (deployed):", deployedProxy);
 
         vm.stopBroadcast();
     }
