@@ -1,105 +1,126 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "forge-std/Test.sol";
-import {Foundation} from "src/Foundation.sol";
-import {CREATE3} from "solady/utils/CREATE3.sol";
-import {ERC1967Proxy} from "createx-forge/src/ERC1967Proxy.sol";
+/// @title ProxyDeterminismTest
+/// @notice Demonstrates that for `ERC1967Factory.deployDeterministicAndCall`,
+///         the proxy address depends **only** on `factory` + `salt`.
+///         Implementation address, admin address, caller address / nonce, and
+///         `initialize()` calldata are all written *after* deployment and do
+///         not affect the CREATE2 address (it is
+///         `keccak256(0xff‖factory‖salt‖factory.initCodeHash())[12:]`).
 
-interface IImmutableCreate2Factory {
-    function safeCreate2(bytes32 salt, bytes memory initCode) external payable returns (address);
+import "forge-std/Test.sol";
+import {ERC1967Factory} from "lib/solady/src/utils/ERC1967Factory.sol";
+
+// Simple empty contract to act as dummy implementation target.
+contract Dummy {}
+
+// Implementation that accepts an arbitrary uint256 via foo to allow non-empty
+// init calldata without reverting.
+contract DummyWithFoo {
+    function foo(uint256) external {}
 }
 
-/// @notice Unit-tests that our deterministic inputs generate the **same**
-///         implementation & proxy addresses on both Sepolia and Mainnet forks.
-///         Replace the constants below with the real values you mined.
-contract DeterministicAddressTest is Test {
-    // ---------------------------------------------------------------------
-    // CONSTANTS — UPDATE BEFORE RUNNING
-    // ---------------------------------------------------------------------
-    address constant IMPL_DEPLOYER = 0x1821BD18CBdD267CE4e389f893dDFe7BEB333aB6; // virgin wallet (nonce-0)
-    bytes32 constant IMPL_SALT     = bytes32(uint256(21245));                    // vanity salt for implementation
+contract ProxyDeterminismTest is Test {
+    /* --------------------------------------------------------------------- */
+    /*                               SETTINGS                                */
+    /* --------------------------------------------------------------------- */
 
-    address constant FACTORY       = 0x0000000000FFe8B47B3e2130213B802212439497; // ImmutableCreate2Factory
-    bytes32 constant PROXY_SALT    = bytes32(uint256(998877));                   // vanity salt for proxy
-    address constant PROXY_ADMIN   = 0x1152115211521152115211521152115211521152; // proxy admin (constant)
-    address constant CALLER_WALLET = 0x1111222233334444555566667777888899990000; // broadcasts proxy deployment
-    // ---------------------------------------------------------------------
+    bytes32 internal constant SALT = bytes32(uint256(123456)); // top-96-bits == 0
 
-    function _predictImpl() internal pure returns (address) {
-        return CREATE3.predictDeterministicAddress(IMPL_SALT, IMPL_DEPLOYER);
+    // Deploy a fresh factory for an isolated playground.
+    ERC1967Factory internal factory;
+
+    // Dummy implementation instances created during tests.
+
+    function setUp() public {
+        factory = new ERC1967Factory();
     }
 
-    function _proxyInitCode(address implementation) internal pure returns (bytes memory) {
-        return abi.encodePacked(type(ERC1967Proxy).creationCode, abi.encode(implementation, PROXY_ADMIN));
+    /* --------------------------------------------------------------------- */
+    /*                               INTERNALS                                */
+    /* --------------------------------------------------------------------- */
+
+    function _predict() internal view returns (address) {
+        return factory.predictDeterministicAddress(SALT);
     }
 
-    function _predictProxy(address implementation) internal pure returns (address) {
-        bytes32 initHash = keccak256(_proxyInitCode(implementation));
-        return address(uint160(uint256(keccak256(
-            abi.encodePacked(bytes1(0xff), FACTORY, PROXY_SALT, initHash)
-        ))));
-    }
-
-    /// @notice Checks predictions on the current fork.
-    function test_LocalPredictions() public {
-        address impl  = _predictImpl();
-        address proxy = _predictProxy(impl);
-        emit log_named_address("Predicted implementation", impl);
-        emit log_named_address("Predicted proxy", proxy);
-        assertEq(uint160(proxy) >> 140, uint160(impl) >> 140, "vanity upper-nibble mismatch");
-    }
-
-    /// @notice Ensures predictions are identical on Sepolia & Mainnet forks.
-    ///         Requires `[rpc_endpoints]` for `sepolia` and `mainnet` in foundry.toml.
-    function test_DeterminismAcrossChains() external {
-        uint256 sepoliaFork = vm.createFork(vm.rpcUrl("sepolia"));
-        uint256 mainFork    = vm.createFork(vm.rpcUrl("mainnet"));
-
-        // Sepolia predictions
-        vm.selectFork(sepoliaFork);
-        address implSepolia  = _predictImpl();
-        address proxySepolia = _predictProxy(implSepolia);
-
-        // Mainnet predictions
-        vm.selectFork(mainFork);
-        address implMainnet  = _predictImpl();
-        address proxyMainnet = _predictProxy(implMainnet);
-
-        assertEq(implSepolia, implMainnet,   "implementation mismatch");
-        assertEq(proxySepolia, proxyMainnet, "proxy mismatch");
-    }
-
-    /// @notice End-to-end deploy on a fork: deploy implementation via CREATE3,
-    ///         then proxy via ImmutableCreate2Factory, and assert addresses.
-    function _deployAndAssert() internal {
-        // --- Fund wallets with 10 ether each ---
-        vm.deal(IMPL_DEPLOYER, 10 ether);
-        vm.deal(CALLER_WALLET, 10 ether);
-
-        // --- Deploy Implementation via CREATE3 ---
-        vm.startPrank(IMPL_DEPLOYER);
-        address impl = CREATE3.deployDeterministic(type(Foundation).creationCode, IMPL_SALT);
+    function _deploy(
+        address implementation,
+        address admin,
+        bytes memory initCalldata,
+        address caller
+    ) internal returns (address deployed) {
+        uint256 snap = vm.snapshot();
+        vm.startPrank(caller);
+        deployed = address(factory.deployDeterministicAndCall(implementation, admin, SALT, initCalldata));
         vm.stopPrank();
-        assertEq(impl, _predictImpl(), "implementation deployment mismatch");
-
-        // --- Deploy Proxy via factory ---
-        bytes memory proxyInit = _proxyInitCode(impl);
-        vm.startPrank(CALLER_WALLET);
-        address proxy = IImmutableCreate2Factory(FACTORY).safeCreate2(PROXY_SALT, proxyInit);
-        vm.stopPrank();
-        assertEq(proxy, _predictProxy(impl), "proxy deployment mismatch");
+        vm.revertTo(snap); // Rewind so we can reuse the `salt` in later cases.
     }
 
-    function test_EndToEnd_SepoliaFork() external {
-        uint256 forkId = vm.createFork(vm.rpcUrl("sepolia"));
-        vm.selectFork(forkId);
-        _deployAndAssert();
+    /* --------------------------------------------------------------------- */
+    /*                                 TESTS                                  */
+    /* --------------------------------------------------------------------- */
+
+    /// @notice Proxy address is independent of implementation address.
+    function test_ImplementationIrrelevant() external {
+        address impl1 = address(new Dummy());
+        address impl2 = address(new Dummy());
+
+        address predicted = _predict();
+
+        address dep1 = _deploy(impl1, address(0xA1), new bytes(0), address(0xBEEF));
+        assertEq(dep1, predicted, "deployment 1 mismatch");
+
+        address dep2 = _deploy(impl2, address(0xA1), new bytes(0), address(0xBEEF));
+        assertEq(dep2, predicted, "deployment 2 mismatch");
     }
 
-    function test_EndToEnd_MainnetFork() external {
-        uint256 forkId = vm.createFork(vm.rpcUrl("mainnet"));
-        vm.selectFork(forkId);
-        _deployAndAssert();
+    /// @notice Proxy address is independent of initialize calldata.
+    function test_CalldataIrrelevant() external {
+        address impl = address(new DummyWithFoo());
+        address predicted = _predict();
+
+        bytes memory initA = new bytes(0);
+        bytes memory initB = abi.encodeWithSignature("foo(uint256)", 42);
+
+        address depA = _deploy(impl, address(0xA1), initA, address(0xBEEF));
+        assertEq(depA, predicted, "deploy A mismatch");
+
+        address depB = _deploy(impl, address(0xA1), initB, address(0xBEEF));
+        assertEq(depB, predicted, "deploy B mismatch");
+    }
+
+    /// @notice Proxy address is independent of admin address.
+    function test_AdminIrrelevant() external {
+        address impl = address(new Dummy());
+        address predicted = _predict();
+
+        address depA = _deploy(impl, address(0xA1), new bytes(0), address(0xBEEF));
+        assertEq(depA, predicted, "admin A mismatch");
+
+        address depB = _deploy(impl, address(0xA2), new bytes(0), address(0xBEEF));
+        assertEq(depB, predicted, "admin B mismatch");
+    }
+
+    /// @notice Proxy address is independent of the caller address and its nonce.
+    function test_CallerAndNonceIrrelevant() external {
+        address impl = address(new Dummy());
+        address predicted = _predict();
+
+        // Caller #1 at nonce-0.
+        address dep1 = _deploy(impl, address(0xA1), new bytes(0), address(0xCAFE));
+        assertEq(dep1, predicted, "caller 1 mismatch");
+
+        // Caller #2 perform some random txs to bump its nonce, then deploy.
+        address caller2 = address(0xDEAD);
+        vm.deal(caller2, 1 ether);
+        vm.prank(caller2);
+        payable(caller2).transfer(0); // dummy tx increments nonce
+        vm.prank(caller2);
+        payable(caller2).transfer(0);
+
+        address dep2 = _deploy(impl, address(0xA1), new bytes(0), caller2);
+        assertEq(dep2, predicted, "caller 2 mismatch");
     }
 }
