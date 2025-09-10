@@ -10,6 +10,7 @@ import {UpgradeableBeacon} from "solady/utils/UpgradeableBeacon.sol";
 import {ERC1967Factory} from "solady/utils/ERC1967Factory.sol";
 import {ERC20} from "solady/tokens/ERC20.sol";
 import {MockERC721} from "./mocks/MockERC721.sol";
+import {VanitySalt} from "./utils/VanitySalt.sol";
 
 contract CharteredFundTest is Test {
     // Core contracts
@@ -72,7 +73,12 @@ contract CharteredFundTest is Test {
         root.setMarshal(backend, true);
 
         // ─── Charter single fund for tests ───────────────────────────────────
-        bytes32 salt = bytes32(uint256(0xDEADBEEF));
+        bytes memory args = abi.encodeWithSelector(
+            CharteredFundImplementation.initialize.selector,
+            address(root),
+            fundOwner
+        );
+        bytes32 salt = VanitySalt.mine(beacon, args, address(root), 1_000_000);
         vm.prank(backend);
         address fundAddress = root.charterFund(fundOwner, salt);
         fund = CharteredFundImplementation(payable(fundAddress));

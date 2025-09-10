@@ -10,6 +10,7 @@ import {CharteredFundImplementationV2} from "./mocks/CharteredFundImplementation
 import {UpgradeableBeacon} from "solady/utils/UpgradeableBeacon.sol";
 import {MockERC721} from "./mocks/MockERC721.sol";
 import {ERC1967Factory} from "solady/utils/ERC1967Factory.sol";
+import {VanitySalt} from "./utils/VanitySalt.sol";
 
 interface IERC721 {
     function ownerOf(uint256) external view returns (address);
@@ -24,6 +25,8 @@ contract BeaconUpgradeTest is Test {
     // MiladyStation NFT used to gate owner functions
     address ownerNFT;
     uint256 ownerTokenId;
+
+    address charterBeacon;
 
     function setUp() public {
         uint256 mainnetFork = vm.createSelectFork(vm.rpcUrl("mainnet"));
@@ -40,7 +43,8 @@ contract BeaconUpgradeTest is Test {
 
         // Deploy CharteredFund implementation and beacon
         address cfImpl = address(new CharteredFundImplementation());
-        address beacon = address(new UpgradeableBeacon(admin, cfImpl));
+        charterBeacon = address(new UpgradeableBeacon(admin, cfImpl));
+        address beacon = charterBeacon;
 
         // Deploy Foundation proxy via factory
         address proxy = new ERC1967Factory().deploy(address(new Foundation()), admin);
@@ -62,7 +66,12 @@ contract BeaconUpgradeTest is Test {
     }
 
     function test_charterFund_throughBeacon() public {
-        bytes32 salt = keccak256("beacon_test");
+        bytes memory args = abi.encodeWithSelector(
+            CharteredFundImplementation.initialize.selector,
+            address(root),
+            user
+        );
+        bytes32 salt = VanitySalt.mine(charterBeacon, args, address(root), 1_000_000);
 
         address predicted = root.computeCharterAddress(user, salt);
 
@@ -82,7 +91,14 @@ contract BeaconUpgradeTest is Test {
 
     function test_upgradePropagation() public {
         // Charter fund first
-        bytes32 salt = bytes32(0);
+        bytes memory args2 = abi.encodeWithSelector(
+            CharteredFundImplementation.initialize.selector,
+            address(root),
+            user
+        );
+        bytes32 salt = VanitySalt.mine(charterBeacon, args2, address(root), 1_000_000);
+
+        // Deploy the fund via backend marshal
         vm.prank(backend);
         address fundAddress = root.charterFund(user, salt);
 

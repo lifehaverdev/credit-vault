@@ -17,6 +17,7 @@ import {IFoundation} from "../src/interfaces/IFoundation.sol";
 import {NoReceiver} from "./mocks/NoReceiver.sol";
 import {ReentrancyERC20} from "./mocks/ReentrancyERC20.sol";
 import {ReentrancyAttacker} from "./mocks/ReentrancyAttacker.sol";
+import {VanitySalt} from "./utils/VanitySalt.sol";
 
 interface IERC721 {
     function safeTransferFrom(address from, address to, uint256 tokenId) external;
@@ -46,6 +47,9 @@ contract FoundationTest is Test {
     // Secondary NFT used for custody-related NFT tests (to avoid governance-NFT side-effects)
     address testNFT;
     uint256 testTokenId;
+
+    // Beacon address cached for salt mining helper
+    address internal charterBeacon;
 
     // --- Events ---
     event FundChartered(address indexed fundAddress, address indexed owner, bytes32 salt);
@@ -88,7 +92,7 @@ contract FoundationTest is Test {
         // Deploy implementation and proxy for Foundation
         // 1. Deploy CharteredFund implementation and beacon
         address cfImpl = address(new CharteredFundImplementation());
-        address beacon = address(new UpgradeableBeacon(admin, cfImpl));
+        charterBeacon = address(new UpgradeableBeacon(admin, cfImpl));
 
         // 2. Pick owner NFT per chain
         (ownerNFT, ownerTokenId) = _selectOwnerNFT();
@@ -124,7 +128,7 @@ contract FoundationTest is Test {
         ICreateX(CREATEX_ADDRESS).deployCreate3AndInit(
             rawSalt,
             proxyInitCode,
-            abi.encodeWithSelector(Foundation.initialize.selector, ownerNFT, ownerTokenId, beacon),
+            abi.encodeWithSelector(Foundation.initialize.selector, ownerNFT, ownerTokenId, charterBeacon),
             ICreateX.Values(0, 0)
         );
 
@@ -146,6 +150,15 @@ contract FoundationTest is Test {
     /// @dev Returns the canonical MiladyStation NFT and hard-coded tokenId 598, assumed to be owned by `admin` on mainnet.
     function _selectOwnerNFT() internal pure returns (address nft, uint256 tokenId) {
         return (MILADYSTATION, 598);
+    }
+
+    function _mineSalt(address _owner) internal view returns (bytes32) {
+        bytes memory args = abi.encodeWithSelector(
+            CharteredFundImplementation.initialize.selector,
+            address(root),
+            _owner
+        );
+        return VanitySalt.mine(charterBeacon, args, address(root), 1_000_000);
     }
 
     // --- Helper Functions ---
@@ -558,7 +571,7 @@ contract FoundationTest is Test {
 
     // --- Power User Flow (CharteredFund Interaction) ---
     function test_charterFund_succeeds() public {
-        bytes32 salt = keccak256("test_salt");
+        bytes32 salt = _mineSalt(user);
 
         vm.startPrank(backend);
         address fundAddress = root.charterFund(user, salt);
@@ -572,7 +585,7 @@ contract FoundationTest is Test {
     }
 
     function test_charterFund_predictableAddress() public {
-        bytes32 salt = keccak256("predictable_salt");
+        bytes32 salt = _mineSalt(user);
         
         // Predict address
         address predictedAddress = root.computeCharterAddress(user, salt);
@@ -586,8 +599,9 @@ contract FoundationTest is Test {
 
     function test_fund_contribute_erc20() public {
         // 1. Create fund
+        bytes32 saltFund = _mineSalt(user);
         vm.prank(backend);
-        address fundAddress = root.charterFund(user, "salt");
+        address fundAddress = root.charterFund(user, saltFund);
         CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
 
         // 2. Contribute PEPE into the fund
@@ -613,8 +627,9 @@ contract FoundationTest is Test {
 
     function test_fund_contribute_eth() public {
         // 1. Create fund
+        bytes32 saltFund = _mineSalt(user);
         vm.prank(backend);
-        address fundAddress = root.charterFund(user, "salt");
+        address fundAddress = root.charterFund(user, saltFund);
 
         // 2. Contribute ETH into the fund
         uint256 contributeAmount = 2 ether;
@@ -681,7 +696,7 @@ contract FoundationTest is Test {
     function test_fundRequestRescission_succeeds_whenFrozen() public {
         // 1. Create fund and contribute ETH
         vm.startPrank(backend);
-        address fundAddress = root.charterFund(user, "salt");
+        address fundAddress = root.charterFund(user, _mineSalt(user));
         vm.stopPrank();
         CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
         
@@ -950,8 +965,9 @@ contract FoundationTest is Test {
     // --- Integration Tests ---
     function test_root_and_charteredFund_emitContribute_and_Rescind_correctly() public {
         // 1. Create a CharteredFund.
+        bytes32 saltFund = _mineSalt(anotherUser);
         vm.startPrank(backend);
-        address fundAddress = root.charterFund(anotherUser, bytes32(0));
+        address fundAddress = root.charterFund(anotherUser, saltFund);
         vm.stopPrank();
         CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
 
@@ -984,8 +1000,9 @@ contract FoundationTest is Test {
 
     function test_charteredFund_nftContribute_updatesCustody() public {
         // 1. Create a CharteredFund for 'anotherUser'
+        bytes32 saltFund = _mineSalt(anotherUser);
         vm.startPrank(backend);
-        address fundAddress = root.charterFund(anotherUser, bytes32(0));
+        address fundAddress = root.charterFund(anotherUser, saltFund);
         vm.stopPrank();
         CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
 
@@ -1014,8 +1031,9 @@ contract FoundationTest is Test {
 
     function test_charteredFund_nftAllocate_movesFromProtocolEscrow() public {
         // 1. Create a CharteredFund.
+        bytes32 saltFund = _mineSalt(anotherUser);
         vm.prank(backend);
-        address fundAddress = root.charterFund(anotherUser, bytes32(0));
+        address fundAddress = root.charterFund(anotherUser, saltFund);
         vm.stopPrank();
         CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
 
@@ -1046,8 +1064,9 @@ contract FoundationTest is Test {
         // NOTE: This test confirms that CharteredFund.remit is also for fungibles only.
         
         // 1. Create a CharteredFund.
+        bytes32 saltFund = _mineSalt(anotherUser);
         vm.startPrank(backend);
-        address fundAddress = root.charterFund(anotherUser, bytes32(0));
+        address fundAddress = root.charterFund(anotherUser, saltFund);
         vm.stopPrank();
         CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
 
@@ -1084,8 +1103,9 @@ contract FoundationTest is Test {
         // NOTE: This test confirms that CharteredFund.requestRescission is also for fungibles only.
         
         // 1. Create a CharteredFund.
+        bytes32 saltFund = _mineSalt(anotherUser);
         vm.startPrank(backend);
-        address fundAddress = root.charterFund(anotherUser, bytes32(0));
+        address fundAddress = root.charterFund(anotherUser, saltFund);
         vm.stopPrank();
         CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
 
@@ -1113,8 +1133,9 @@ contract FoundationTest is Test {
         // NOTE: This test confirms that even with global refund mode, CharteredFund.requestRescission is for fungibles only.
 
         // 1. Create a CharteredFund and escrow an NFT.
+        bytes32 saltFund = _mineSalt(anotherUser);
         vm.startPrank(backend);
-        address fundAddress = root.charterFund(anotherUser, bytes32(0));
+        address fundAddress = root.charterFund(anotherUser, saltFund);
         vm.stopPrank();
         CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
 
@@ -1173,8 +1194,8 @@ contract FoundationTest is Test {
         assertEq(balance_after, balance_before + contributeAmount, "User PEPE balance should increase");
 
         bytes32 custodyKey = _getCustodyKey(pepeWhale, PEPE);
-        (uint128 userOwned, ) = _splitAmount(root.custody(custodyKey));
-        assertEq(userOwned, 0, "userOwned balance should be zero after rescission");
+        (, uint128 escrow) = _splitAmount(root.custody(custodyKey));
+        assertEq(escrow, 0, "escrow balance should be zero after rescission");
     }
 
     function test_backendRemit_eth_sendsEscrow() public {

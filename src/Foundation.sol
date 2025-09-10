@@ -91,6 +91,7 @@ contract Foundation is Keep, UUPSUpgradeable, Initializable, ReentrancyGuard {
     event Donation(address indexed funder, address indexed token, uint256 amount, bool isNFT, bytes32 metadata);
     error AlreadyInit();
     error InvalidBeacon();
+    error Vanity();
 
     /*
        ______
@@ -177,6 +178,22 @@ contract Foundation is Keep, UUPSUpgradeable, Initializable, ReentrancyGuard {
             address(this),
             _owner
         );
+
+        // --------------------------------------------------------------------
+        // Vanity-prefix guard – ensure the resulting proxy address starts with
+        // 0x1152 (16-bit prefix).  The predicted address must satisfy the
+        // condition BEFORE we deploy to avoid orphaning an untracked proxy.
+        // --------------------------------------------------------------------
+
+        address predicted = LibClone.predictDeterministicAddressERC1967BeaconProxy(
+            charterBeacon,
+            args,
+            _salt,
+            address(this)
+        );
+
+        // Extract the top 4 hex digits (16 bits) of the predicted address.
+        if (uint160(predicted) >> 144 != 0x1152) revert Vanity();
 
         fund = LibClone.deployDeterministicERC1967BeaconProxy(charterBeacon, args, _salt);
         if (fund == address(0)) revert Fail();

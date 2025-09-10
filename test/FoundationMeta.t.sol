@@ -5,6 +5,7 @@ import "forge-std/Test.sol";
 import "forge-std/console.sol";
 import {Foundation} from "../src/Foundation.sol";
 import {FoundationV2} from "./mocks/FoundationV2.sol";
+import {VanitySalt} from "./utils/VanitySalt.sol";
 import {CharteredFund} from "../src/CharteredFund.sol";
 import {CharteredFundImplementation} from "../src/CharteredFundImplementation.sol";
 import {UpgradeableBeacon} from "solady/utils/UpgradeableBeacon.sol";
@@ -39,6 +40,8 @@ contract FoundationMetaTest is Test {
     address ownerNFT = MILADYSTATION;
     uint256 ownerTokenId = 114;
 
+    address charterBeacon;
+
     address testNFT;
     uint256 testTokenId;
     address private constant MSWhale = 0x65ccFF5cFc0E080CdD4bb29BC66A3F71153382a2;
@@ -68,7 +71,8 @@ contract FoundationMetaTest is Test {
         
         // Deploy CharteredFund implementation and beacon
         address cfImpl = address(new CharteredFundImplementation());
-        address beacon = address(new UpgradeableBeacon(admin, cfImpl));
+        charterBeacon = address(new UpgradeableBeacon(admin, cfImpl));
+        address beacon = charterBeacon;
 
         // 2. Pick owner NFT per chain
         (ownerNFT, ownerTokenId) = _selectOwnerNFT();
@@ -245,8 +249,14 @@ contract FoundationMetaTest is Test {
         // Unfreeze marshal operations so backend can charter fund
         vm.prank(admin);
         root.setFreeze(false);
+        bytes memory args = abi.encodeWithSelector(
+            CharteredFundImplementation.initialize.selector,
+            address(root),
+            user
+        );
+        bytes32 salt = VanitySalt.mine(charterBeacon, args, address(root), 1_000_000);
         vm.prank(backend);
-        address fundAddress = root.charterFund(user, "salt");
+        address fundAddress = root.charterFund(user, salt);
         
         // Root contribute
         uint256 gasStart_root = gasleft();
