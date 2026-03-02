@@ -1345,4 +1345,39 @@ contract FoundationTest is Test {
         assertEq(ownedAfter, donateAmount, "allocate must not zero protocol.owned");
     }
 
+    /// @notice Verifies that remit with fee does not zero the protocol's owned balance.
+    /// Regression test for _remit bug: _packAmount(0, escrow+fee) was discarding protocolOwned.
+    function test_remit_withFee_preservesProtocolOwned() public {
+        uint256 depositAmount = 1 ether;
+        uint256 feeAmount = 0.1 ether;
+        uint256 donateAmount = 0.5 ether;
+
+        // 1. User deposits ETH
+        vm.deal(user, depositAmount);
+        vm.prank(user);
+        (bool ok,) = address(root).call{value: depositAmount}("");
+        require(ok);
+
+        // 2. Marshal commits full amount to escrow
+        vm.prank(backend);
+        root.commit(address(root), user, address(0), depositAmount, 0, "seed");
+
+        // 3. Seed protocol.owned via ETH donation
+        vm.deal(address(this), donateAmount);
+        root.donate{value: donateAmount}(address(0), donateAmount, bytes32(0), false);
+
+        // 4. Confirm owned is non-zero before remit
+        bytes32 key = _getCustodyKey(address(root), address(0));
+        (uint128 ownedBefore,) = _splitAmount(root.custody(key));
+        assertEq(ownedBefore, donateAmount, "protocol.owned should equal donation before remit");
+
+        // 5. Remit with fee — this should credit protocol.escrow without touching protocol.owned
+        vm.prank(backend);
+        root.remit(user, address(0), depositAmount - feeAmount, uint128(feeAmount), "remit");
+
+        // 6. Protocol.owned must be unchanged
+        (uint128 ownedAfter,) = _splitAmount(root.custody(key));
+        assertEq(ownedAfter, donateAmount, "remit must not zero protocol.owned");
+    }
+
 } 

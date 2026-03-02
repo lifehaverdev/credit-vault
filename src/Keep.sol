@@ -240,8 +240,8 @@ abstract contract Keep {
 
         if (fee > 0) {
             bytes32 protocolKey = _getCustodyKey(address(this), token);
-            (, uint128 protocolEscrow) = _splitAmount(custody[protocolKey]);
-            custody[protocolKey] = _packAmount(0, protocolEscrow + fee);
+            (uint128 protocolOwned, uint128 protocolEscrow) = _splitAmount(custody[protocolKey]);
+            custody[protocolKey] = _packAmount(protocolOwned, protocolEscrow + fee);
         }
         return true;
     }
