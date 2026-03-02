@@ -56,12 +56,6 @@ contract FebruaryOverhaul is Script {
         console2.log("Foundation impl:   ", _getImpl(proxy));
         console2.log("Charter impl:      ", UpgradeableBeacon(beacon).implementation());
 
-        // Broadcaster must be the beacon owner
-        require(
-            beaconOwner == msg.sender,
-            "Broadcaster is not the beacon owner - cannot transfer beacon"
-        );
-
         // Verify contract has enough ETH to back the ETH recovery amount.
         // protocolOwned represents donations already in the contract — the ETH
         // is physically present, we are only restoring the accounting. If the
@@ -78,7 +72,15 @@ contract FebruaryOverhaul is Script {
         console2.log("");
 
         // ── Execute ───────────────────────────────────────────────────────────
+        // msg.sender is the broadcaster (keystore account) inside this block.
         vm.startBroadcast();
+
+        // Broadcaster must be the beacon owner — checked here where msg.sender
+        // is the actual keystore account rather than the script contract.
+        require(
+            beaconOwner == msg.sender,
+            "Broadcaster is not the beacon owner - cannot transfer beacon"
+        );
 
         // 1. Transfer beacon ownership from admin EOA to Foundation proxy.
         //    After this, Foundation is the sole authority over charter upgrades.
