@@ -343,6 +343,18 @@ contract Foundation is Keep, UUPSUpgradeable, Initializable, ReentrancyGuard {
         emit Donation(funder, token, amount, isNFT, metadata);
     }
 
+    /// @notice Called by a chartered fund to credit protocol-earned fees into Foundation's
+    ///         escrow bucket. For ETH: send msg.value == amount. For ERC20: transfer tokens
+    ///         to Foundation first, then call this function.
+    function creditProtocolEscrow(address token, uint256 amount) external payable onlyCharteredFund {
+        if (token == address(0)) {
+            if (msg.value != amount) revert Math();
+        }
+        bytes32 key = _getCustodyKey(address(this), token);
+        (uint128 owned, uint128 escrow) = _splitAmount(custody[key]);
+        custody[key] = _packAmount(owned, escrow + uint128(amount));
+    }
+
     /*
 
     ________

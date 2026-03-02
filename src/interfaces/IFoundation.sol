@@ -17,4 +17,5 @@ interface IFoundation {
     function recordRescissionRequest(address user, address token) external;
     function recordRemittance(address user, address token, uint256 amount, uint128 fee, bytes calldata metadata) external;
     function recordCommitment(address fundAddress, address user, address token, uint256 escrowAmount, uint128 fee, bytes calldata metadata) external;
-} 
+    function creditProtocolEscrow(address token, uint256 amount) external payable;
+}

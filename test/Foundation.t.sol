@@ -1380,4 +1380,39 @@ contract FoundationTest is Test {
         assertEq(ownedAfter, donateAmount, "remit must not zero protocol.owned");
     }
 
+    /// @notice A registered chartered fund can credit protocol escrow into Foundation.
+    function test_creditProtocolEscrow_ETH_byCharteredFund() public {
+        // Charter a fund so we have a valid onlyCharteredFund caller
+        address fundOwner = makeAddr("fundOwner");
+        vm.deal(fundOwner, 1 ether);
+        bytes32 salt = _mineSalt(fundOwner);
+        vm.prank(backend);
+        address fundAddress = root.charterFund(fundOwner, salt);
+
+        uint256 creditAmount = 0.3 ether;
+
+        // Snapshot Foundation protocol.escrow before
+        bytes32 key = _getCustodyKey(address(root), address(0));
+        (, uint128 escrowBefore) = _splitAmount(root.custody(key));
+
+        // Fund the charter fund with ETH so it has something to send
+        vm.deal(fundAddress, creditAmount);
+
+        // Charter fund calls creditProtocolEscrow{value: creditAmount}
+        vm.prank(fundAddress);
+        root.creditProtocolEscrow{value: creditAmount}(address(0), creditAmount);
+
+        // Foundation's protocol.escrow should have increased by creditAmount
+        (, uint128 escrowAfter) = _splitAmount(root.custody(key));
+        assertEq(escrowAfter, escrowBefore + creditAmount, "Foundation.escrow must grow by credit amount");
+    }
+
+    /// @notice A non-chartered address cannot call creditProtocolEscrow.
+    function test_creditProtocolEscrow_revertsForNonFund() public {
+        vm.deal(user, 1 ether);
+        vm.prank(user);
+        vm.expectRevert(IFoundation.Auth.selector);
+        root.creditProtocolEscrow{value: 0.1 ether}(address(0), 0.1 ether);
+    }
+
 } 
