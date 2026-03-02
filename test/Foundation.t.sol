@@ -1306,4 +1306,43 @@ contract FoundationTest is Test {
         assertEq(escrow, 0, "escrow balance should be zero after rescission");
     }
 
+    /// @notice Verifies that allocate does not zero the protocol's owned balance.
+    /// Regression test for _allocate bug: _packAmount(0, escrow) was discarding protocolOwned.
+    function test_allocate_preservesProtocolOwned() public {
+        uint256 depositAmount = 1 ether;
+        uint256 feeAmount = 0.1 ether;
+        uint256 donateAmount = 0.5 ether;
+
+        // 1. User deposits ETH
+        vm.deal(user, depositAmount);
+        vm.prank(user);
+        (bool ok,) = address(root).call{value: depositAmount}("");
+        require(ok);
+
+        // 2. Marshal commits full amount to escrow (fee=0)
+        vm.prank(backend);
+        root.commit(address(root), user, address(0), depositAmount, 0, "seed");
+
+        // 3. Marshal remits with fee — seeds protocol.escrow
+        vm.prank(backend);
+        root.remit(user, address(0), depositAmount - feeAmount, uint128(feeAmount), "fee");
+
+        // 4. Seed protocol.owned via ETH donation
+        vm.deal(address(this), donateAmount);
+        root.donate{value: donateAmount}(address(0), donateAmount, bytes32(0), false);
+
+        // 5. Assert owned is non-zero before allocate
+        bytes32 key = _getCustodyKey(address(root), address(0));
+        (uint128 ownedBefore,) = _splitAmount(root.custody(key));
+        assertEq(ownedBefore, donateAmount, "protocol.owned should equal donation");
+
+        // 6. Allocate from protocol.escrow to backend
+        vm.prank(backend);
+        root.allocate(backend, address(0), feeAmount);
+
+        // 7. Protocol.owned must be unchanged
+        (uint128 ownedAfter,) = _splitAmount(root.custody(key));
+        assertEq(ownedAfter, donateAmount, "allocate must not zero protocol.owned");
+    }
+
 } 

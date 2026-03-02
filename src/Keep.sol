@@ -110,7 +110,7 @@ abstract contract Keep {
     ///      untouched and returns `false`.
     function _allocate(address user, address token, uint256 amount) internal returns (bool) {
         bytes32 protocolKey = _getCustodyKey(address(this), token);
-        (, uint128 protocolEscrow) = _splitAmount(custody[protocolKey]);
+        (uint128 protocolOwned, uint128 protocolEscrow) = _splitAmount(custody[protocolKey]);
         if (protocolEscrow < amount) return false;
 
         bytes32 userKey = _getCustodyKey(user, token);
@@ -118,7 +118,7 @@ abstract contract Keep {
 
         // Update balances
         protocolEscrow -= uint128(amount);
-        custody[protocolKey] = _packAmount(0, protocolEscrow);
+        custody[protocolKey] = _packAmount(protocolOwned, protocolEscrow);
         custody[userKey]    = _packAmount(userOwned, userEscrow + uint128(amount));
         return true;
     }
