@@ -16,7 +16,7 @@ import {CharteredFundImplementation} from "src/CharteredFundImplementation.sol";
 ///
 /// Usage:
 ///   forge script script/utils/upgradeCharter.s.sol \
-///     --fork-url $RPC_URL --broadcast --sender $OWNER_WALLET -vvvv
+///     --fork-url $RPC_URL --broadcast --account <keystore-name> -vvvv
 contract UpgradeCharter is Script {
     function run() external {
         address proxy = vm.envAddress("FOUNDATION_PROXY");

@@ -30,7 +30,7 @@ ICreateX constant CreateX = ICreateX(CREATEX_ADDRESS);
 ///
 /// Usage:
 ///   forge script script/2-DeployFoundationKeep.s.sol \
-///     --fork-url $RPC_URL --broadcast --sender $DEPLOYER -vvvv
+///     --fork-url $RPC_URL --broadcast --account <keystore-name> -vvvv
 contract DeployFoundationKeep is Script {
     struct DeployAddrs {
         address charterImpl;

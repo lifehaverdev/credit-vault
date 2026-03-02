@@ -355,6 +355,16 @@ contract Foundation is Keep, UUPSUpgradeable, Initializable, ReentrancyGuard {
         custody[key] = _packAmount(owned, escrow + uint128(amount));
     }
 
+    /// @notice Restores protocol.owned accounting corrupted by the pre-fix _allocate/_remit
+    ///         bugs. No ETH or ERC20 moves — the assets are already in the contract.
+    ///         Amount should equal the sum of all Donation event amounts for the given token
+    ///         minus the current protocol.owned value (query custody slot before calling).
+    function recoverProtocolOwned(address token, uint128 amount) external onlyOwner {
+        bytes32 key = _getCustodyKey(address(this), token);
+        (uint128 owned, uint128 escrow) = _splitAmount(custody[key]);
+        custody[key] = _packAmount(owned + amount, escrow);
+    }
+
     /*
 
     ________
