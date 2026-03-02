@@ -230,4 +230,49 @@ contract CharteredFundTest is Test {
         mock.mint(admin, 1);
         return (address(mock), 1);
     }
+
+    /// @notice sweepProtocolFees moves protocolFee (from commit) from charter fund to Foundation.escrow.
+    function test_sweepProtocolFees_ETH() public {
+        uint256 depositAmount = 2 ether;
+        uint256 netUserAmount = 1.8 ether;
+        uint128 protocolFee = 0.2 ether;
+
+        // 1. User deposits ETH into the chartered fund
+        vm.deal(user, depositAmount);
+        vm.prank(user);
+        (bool ok,) = address(fund).call{value: depositAmount}("");
+        require(ok);
+
+        // 2. Backend commits: net amount for user, zero charter fee, protocolFee to foundation slot
+        vm.prank(backend);
+        fund.commit(address(fund), user, address(0), netUserAmount, 0, protocolFee, "commit");
+
+        // Verify foundation-slot.owned in charter fund's custody is set
+        bytes32 foundationKey = keccak256(abi.encodePacked(address(root), address(0)));
+        (uint128 foundOwned,) = _splitAmount(fund.custody(foundationKey));
+        assertEq(foundOwned, protocolFee, "foundation slot should have protocolFee after commit");
+
+        // Snapshot Foundation's protocol.escrow before sweep
+        bytes32 rootKey = keccak256(abi.encodePacked(address(root), address(0)));
+        (, uint128 rootEscrowBefore) = _splitAmount(root.custody(rootKey));
+
+        // 3. Backend sweeps
+        vm.prank(backend);
+        fund.sweepProtocolFees(address(0));
+
+        // Foundation.escrow must have grown by protocolFee
+        (, uint128 rootEscrowAfter) = _splitAmount(root.custody(rootKey));
+        assertEq(rootEscrowAfter, rootEscrowBefore + protocolFee, "Foundation.escrow must grow after sweep");
+
+        // Charter fund foundation slot must be zeroed
+        (uint128 foundOwnedAfter,) = _splitAmount(fund.custody(foundationKey));
+        assertEq(foundOwnedAfter, 0, "charter fund foundation slot must be zeroed after sweep");
+    }
+
+    /// @notice sweepProtocolFees reverts if nothing to sweep.
+    function test_sweepProtocolFees_revertsIfZero() public {
+        vm.prank(backend);
+        vm.expectRevert(); // Math()
+        fund.sweepProtocolFees(address(0));
+    }
 }

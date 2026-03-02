@@ -244,10 +244,10 @@ contract CharteredFundImplementation is Keep, Ownable, ReentrancyGuard {
         custody[foundationKey] = _packAmount(0, foundationEscrow);
 
         if (token == address(0)) {
-            // IFoundation(foundation).recordProtocolFee{value: foundationOwned}(token, foundationOwned);
+            foundation.creditProtocolEscrow{value: foundationOwned}(token, foundationOwned);
         } else {
-            // SafeTransferLib.safeTransfer(token, address(foundation), foundationOwned);
-            // IFoundation(foundation).recordProtocolFee(token, foundationOwned);
+            SafeTransferLib.safeTransfer(token, address(foundation), foundationOwned);
+            foundation.creditProtocolEscrow(token, foundationOwned);
         }
 
         emit ProtocolFeeSwept(token, foundationOwned);
