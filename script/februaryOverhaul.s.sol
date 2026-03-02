@@ -72,17 +72,11 @@ contract FebruaryOverhaul is Script {
         console2.log("");
 
         // ── Execute ───────────────────────────────────────────────────────────
-        // msg.sender is the broadcaster (keystore account) inside this block.
         vm.startBroadcast();
 
-        // Broadcaster must be the beacon owner — checked here where msg.sender
-        // is the actual keystore account rather than the script contract.
-        require(
-            beaconOwner == msg.sender,
-            "Broadcaster is not the beacon owner - cannot transfer beacon"
-        );
-
         // 1. Transfer beacon ownership from admin EOA to Foundation proxy.
+        //    UpgradeableBeacon.transferOwnership reverts Unauthorized() if the
+        //    broadcaster is not the current beacon owner.
         //    After this, Foundation is the sole authority over charter upgrades.
         UpgradeableBeacon(beacon).transferOwnership(proxy);
         console2.log("1. Beacon ownership transferred to Foundation");
