@@ -1,39 +1,37 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.28;
 
 import "forge-std/Script.sol";
-import "forge-std/console.sol";
+import "forge-std/console2.sol";
+import {Foundation} from "src/Foundation.sol";
+import {CharteredFundImplementation} from "src/CharteredFundImplementation.sol";
 
-// Factory address (same as deployment)
-address constant FACTORY = 0x0000000000006396FF2a80c067f99B3d2Ab4Df24;
-// The proxy we want to upgrade
-address payable constant FOUNDATION_PROXY = payable(0x011528b1d5822B3269d919e38872cC33bdec6d17);
-// The new implementation contract
-address payable constant NEW_FOUNDATION_IMPLEMENTATION = payable(0x115230E319CCD1c760D89a8a4059ac4883240526);
-
-interface IERC1967Factory {
-    function upgradeAndCall(
-        address proxy,
-        address implementation,
-        bytes calldata data
-    ) external payable;
-}
-
-contract UpgradeProxy is Script {
+/// @notice Deploys a new Foundation implementation and upgrades the UUPS proxy.
+///
+/// The caller must be the owner (holder of the owner NFT).
+///
+/// Environment variables:
+///   FOUNDATION_PROXY  – address of the live Foundation proxy
+///
+/// Usage:
+///   forge script script/utils/upgrade.s.sol \
+///     --fork-url $RPC_URL --broadcast --sender $OWNER_WALLET -vvvv
+contract UpgradeFoundation is Script {
     function run() external {
+        address proxy = vm.envAddress("FOUNDATION_PROXY");
+
         vm.startBroadcast();
 
-        // We don't need to call any function on the new implementation upon upgrade, so we pass empty calldata.
-        bytes memory initCalldata = "";
+        // 1. Deploy new implementation
+        address newImpl = address(new Foundation());
+        console2.log("New Foundation implementation:", newImpl);
 
-        IERC1967Factory(FACTORY).upgradeAndCall(
-            FOUNDATION_PROXY,
-            NEW_FOUNDATION_IMPLEMENTATION,
-            initCalldata
-        );
+        // 2. Upgrade the UUPS proxy. This calls through to _authorizeUpgrade
+        //    which is gated onlyOwner. The broadcaster must be the NFT owner.
+        Foundation(payable(proxy)).upgradeToAndCall(newImpl, "");
 
-        console.log("Proxy at", FOUNDATION_PROXY, "upgraded to new implementation at", NEW_FOUNDATION_IMPLEMENTATION);
+        console2.log("Foundation proxy upgraded:", proxy, "-> impl:", newImpl);
 
         vm.stopBroadcast();
     }
-} 
+}
