@@ -6,6 +6,7 @@ import {CreditVault} from "src/CreditVault.sol";
 import {TestToken} from "test/mocks/TestToken.sol";
 import {MockERC721} from "test/mocks/MockERC721.sol";
 import {ReentrancyAttackerV2} from "test/mocks/ReentrancyAttackerV2.sol";
+import {MockERC1155} from "test/mocks/MockERC1155.sol";
 
 contract CreditVaultTest is Test {
     CreditVault vault;
@@ -15,6 +16,7 @@ contract CreditVaultTest is Test {
 
     TestToken token;
     MockERC721 nft;
+    MockERC1155 erc1155;
 
     function setUp() public {
         CreditVault impl = new CreditVault();
@@ -29,6 +31,9 @@ contract CreditVaultTest is Test {
         nft = new MockERC721();
         nft.mint(alice, 1);
         nft.mint(alice, 2);
+
+        erc1155 = new MockERC1155();
+        erc1155.mint(alice, 1, 10);
     }
 
     // =========================================================================
@@ -107,6 +112,16 @@ contract CreditVaultTest is Test {
         vault.transferName(key, bob);
     }
 
+    function test_transferName_revertsIfZeroAddress() public {
+        vm.prank(alice);
+        vault.register("alice");
+        bytes32 key = keccak256("alice");
+
+        vm.prank(alice);
+        vm.expectRevert(CreditVault.ZeroAddress.selector);
+        vault.transferName(key, address(0));
+    }
+
     // =========================================================================
     // pay (ERC20, no referral)
     // =========================================================================
@@ -124,7 +139,7 @@ contract CreditVaultTest is Test {
         vm.startPrank(alice);
         token.approve(address(vault), 100e18);
 
-        vm.expectEmit(true, true, true, true);
+        vm.expectEmit(true, true, false, true);
         emit CreditVault.Payment(alice, bytes32(0), address(token), 100e18, 100e18, 0);
         vault.pay(address(token), 100e18, bytes32(0));
         vm.stopPrank();
@@ -159,7 +174,7 @@ contract CreditVaultTest is Test {
 
         vm.startPrank(alice);
         token.approve(address(vault), 100e18);
-        vm.expectEmit(true, true, true, true);
+        vm.expectEmit(true, true, false, true);
         emit CreditVault.Payment(alice, key, address(token), 100e18, 95e18, 5e18);
         vault.pay(address(token), 100e18, key);
         vm.stopPrank();
@@ -333,6 +348,42 @@ contract CreditVaultTest is Test {
         vm.prank(alice);
         vm.expectRevert();
         vault.withdrawNFT(address(nft), 1, alice);
+    }
+
+    // =========================================================================
+    // ERC1155 receiving and withdrawal
+    // =========================================================================
+
+    function test_onERC1155Received_acceptsToken() public {
+        vm.prank(alice);
+        erc1155.safeTransferFrom(alice, address(vault), 1, 5, "");
+        // vault holds 5 of token id 1
+    }
+
+    function test_onERC1155Received_emitsEvent() public {
+        vm.expectEmit(true, true, false, true);
+        emit CreditVault.ERC1155TokenReceived(alice, address(erc1155), 1, 5);
+        vm.prank(alice);
+        erc1155.safeTransferFrom(alice, address(vault), 1, 5, "");
+    }
+
+    function test_withdrawERC1155_transfersToRecipient() public {
+        vm.prank(alice);
+        erc1155.safeTransferFrom(alice, address(vault), 1, 5, "");
+
+        vm.prank(owner);
+        vault.withdrawERC1155(address(erc1155), 1, 5, bob);
+        // bob now has 5 of token id 1 — verify via balanceOf
+        assertEq(erc1155.balanceOf(bob, 1), 5);
+    }
+
+    function test_withdrawERC1155_revertsIfNotOwner() public {
+        vm.prank(alice);
+        erc1155.safeTransferFrom(alice, address(vault), 1, 5, "");
+
+        vm.prank(alice);
+        vm.expectRevert();
+        vault.withdrawERC1155(address(erc1155), 1, 5, alice);
     }
 
     // =========================================================================

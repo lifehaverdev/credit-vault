@@ -117,6 +117,7 @@ contract CreditVault is OwnableRoles, UUPSUpgradeable, Initializable, Reentrancy
 
     function transferName(bytes32 key, address newOwner) external {
         if (referralOwner[key] != msg.sender) revert NotReferralOwner();
+        if (newOwner == address(0)) revert ZeroAddress();
         referralOwner[key] = newOwner;
         emit ReferralTransferred(key, newOwner);
     }
@@ -193,6 +194,10 @@ contract CreditVault is OwnableRoles, UUPSUpgradeable, Initializable, Reentrancy
     // Multicall
     // -------------------------------------------------------------------------
 
+    /// @notice Batch multiple calls in a single transaction via delegatecall.
+    /// @dev Do NOT batch payETH calls — delegatecall does not split msg.value across sub-calls.
+    ///      Each delegatecalled payETH sub-call sees the full original msg.value.
+    ///      Only ERC20 pay() calls are safe to batch.
     function multicall(bytes[] calldata data) external returns (bytes[] memory results) {
         results = new bytes[](data.length);
         for (uint256 i; i < data.length; i++) {
