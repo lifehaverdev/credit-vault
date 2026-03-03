@@ -66,6 +66,7 @@ contract CreditVault is OwnableRoles, UUPSUpgradeable, Initializable, Reentrancy
     error BpsExceedsCap();
     error ZeroAmount();
     error TransferFailed();
+    error ZeroAddress();
 
     // -------------------------------------------------------------------------
     // Initializer
@@ -109,6 +110,7 @@ contract CreditVault is OwnableRoles, UUPSUpgradeable, Initializable, Reentrancy
 
     function setAddress(bytes32 key, address to) external {
         if (referralOwner[key] != msg.sender) revert NotReferralOwner();
+        if (to == address(0)) revert ZeroAddress();
         referralAddress[key] = to;
         emit ReferralAddressUpdated(key, to);
     }
@@ -191,11 +193,13 @@ contract CreditVault is OwnableRoles, UUPSUpgradeable, Initializable, Reentrancy
     // Multicall
     // -------------------------------------------------------------------------
 
-    function multicall(bytes[] calldata data) external returns (bytes[] memory results) {
+    function multicall(bytes[] calldata data) external nonReentrant returns (bytes[] memory results) {
         results = new bytes[](data.length);
         for (uint256 i; i < data.length; i++) {
             (bool ok, bytes memory result) = address(this).delegatecall(data[i]);
-            require(ok);
+            if (!ok) {
+                assembly { revert(add(result, 0x20), mload(result)) }
+            }
             results[i] = result;
         }
     }
