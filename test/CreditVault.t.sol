@@ -7,6 +7,7 @@ import {TestToken} from "test/mocks/TestToken.sol";
 import {MockERC721} from "test/mocks/MockERC721.sol";
 import {ReentrancyAttackerV2} from "test/mocks/ReentrancyAttackerV2.sol";
 import {MockERC1155} from "test/mocks/MockERC1155.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 
 contract CreditVaultTest is Test {
     CreditVault vault;
@@ -20,8 +21,9 @@ contract CreditVaultTest is Test {
 
     function setUp() public {
         CreditVault impl = new CreditVault();
-        // Deploy as plain contract for unit tests (no proxy needed)
-        vault = impl;
+        // Deploy through an ERC1967 proxy so _disableInitializers() on the impl is respected.
+        address proxy = LibClone.deployERC1967(address(impl));
+        vault = CreditVault(payable(proxy));
         vault.initialize(owner);
 
         token = new TestToken();

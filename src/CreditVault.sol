@@ -7,6 +7,10 @@ import {Initializable} from "solady/utils/Initializable.sol";
 import {ReentrancyGuard} from "solady/utils/ReentrancyGuard.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 
+interface IERC1155 {
+    function safeTransferFrom(address from, address to, uint256 id, uint256 amount, bytes calldata data) external;
+}
+
 contract CreditVault is OwnableRoles, UUPSUpgradeable, Initializable, ReentrancyGuard {
 
     // -------------------------------------------------------------------------
@@ -34,6 +38,14 @@ contract CreditVault is OwnableRoles, UUPSUpgradeable, Initializable, Reentrancy
 
     /// @dev Default referral cut in basis points. Initialized to 500 (5%).
     uint16 public defaultReferralBps;
+
+    // -------------------------------------------------------------------------
+    // Constructor
+    // -------------------------------------------------------------------------
+
+    constructor() {
+        _disableInitializers();
+    }
 
     // -------------------------------------------------------------------------
     // Events
@@ -75,6 +87,10 @@ contract CreditVault is OwnableRoles, UUPSUpgradeable, Initializable, Reentrancy
     function initialize(address _owner) external initializer {
         _initializeOwner(_owner);
         defaultReferralBps = 500;
+    }
+
+    function _guardInitializeOwner() internal pure override returns (bool) {
+        return true;
     }
 
     // -------------------------------------------------------------------------
@@ -139,6 +155,7 @@ contract CreditVault is OwnableRoles, UUPSUpgradeable, Initializable, Reentrancy
     }
 
     function withdrawProtocol(address token, address to, uint256 amount) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
         if (token == ETH) {
             SafeTransferLib.safeTransferETH(to, amount);
         } else {
@@ -147,20 +164,15 @@ contract CreditVault is OwnableRoles, UUPSUpgradeable, Initializable, Reentrancy
     }
 
     function withdrawNFT(address token, uint256 tokenId, address to) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
         SafeTransferLib.safeTransferFrom(token, address(this), to, tokenId);
     }
 
     function withdrawERC1155(address token, uint256 tokenId, uint256 amount, address to)
         external onlyOwner
     {
-        // ERC1155 safeTransferFrom(from, to, id, amount, data)
-        (bool ok,) = token.call(
-            abi.encodeWithSignature(
-                "safeTransferFrom(address,address,uint256,uint256,bytes)",
-                address(this), to, tokenId, amount, ""
-            )
-        );
-        if (!ok) revert TransferFailed();
+        if (to == address(0)) revert ZeroAddress();
+        IERC1155(token).safeTransferFrom(address(this), to, tokenId, amount, "");
     }
 
     // -------------------------------------------------------------------------
