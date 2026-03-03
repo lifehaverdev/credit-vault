@@ -388,12 +388,51 @@ contract CreditVaultTest is Test {
         vault.withdrawERC1155(address(erc1155), 1, 5, alice);
     }
 
+    function test_onERC1155BatchReceived_acceptsAndEmits() public {
+        erc1155.mint(alice, 2, 20);
+
+        uint256[] memory ids = new uint256[](2);
+        uint256[] memory amounts = new uint256[](2);
+        ids[0] = 1; ids[1] = 2;
+        amounts[0] = 5; amounts[1] = 10;
+
+        vm.expectEmit(true, true, false, true);
+        emit CreditVault.ERC1155TokenReceived(alice, address(erc1155), 1, 5);
+        vm.expectEmit(true, true, false, true);
+        emit CreditVault.ERC1155TokenReceived(alice, address(erc1155), 2, 10);
+
+        vm.prank(alice);
+        erc1155.safeBatchTransferFrom(alice, address(vault), ids, amounts, "");
+
+        assertEq(erc1155.balanceOf(address(vault), 1), 5);
+        assertEq(erc1155.balanceOf(address(vault), 2), 10);
+    }
+
     // =========================================================================
     // Reentrancy
     // =========================================================================
 
-    function test_payETH_reentrancy_reverts() public {
-        // Register attacker as referral address
+    function test_payETH_revertingReferrer_skipscut() public {
+        // Deploy a contract with no receive() — it will revert on ETH push
+        address nonPayable = address(new NonPayableContract());
+
+        vm.prank(nonPayable);
+        vault.register("broken");
+        bytes32 key = keccak256("broken");
+
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        // Payment should succeed — referral cut skipped, protocol keeps full amount
+        vault.payETH{value: 1 ether}(key);
+
+        assertEq(address(vault).balance, 1 ether);
+        assertEq(nonPayable.balance, 0);
+    }
+
+    function test_payETH_reentrancy_cutSkipped() public {
+        // Reentrant referral recipient: its receive() tries to re-enter payETH.
+        // The reentrancy guard fires inside the push, the push fails silently,
+        // the cut is skipped, and the payment succeeds — attacker gets nothing.
         bytes32 key = keccak256("attacker");
         address attacker = address(new ReentrancyAttackerV2(address(vault), key));
 
@@ -404,9 +443,11 @@ contract CreditVaultTest is Test {
 
         vm.deal(alice, 1 ether);
         vm.prank(alice);
-        // Should revert because attacker tries to re-enter during referral push
-        vm.expectRevert();
         vault.payETH{value: 1 ether}(key);
+
+        // Payment succeeds, attacker gets no cut, vault holds full amount
+        assertEq(address(vault).balance, 1 ether);
+        assertEq(attacker.balance, 0);
     }
 
     // =========================================================================
@@ -427,3 +468,6 @@ contract CreditVaultTest is Test {
         assertEq(token.balanceOf(address(vault)), 200e18);
     }
 }
+
+/// @dev Helper: a contract with no receive() — reverts on ETH push
+contract NonPayableContract {}

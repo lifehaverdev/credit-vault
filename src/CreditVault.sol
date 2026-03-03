@@ -239,7 +239,10 @@ contract CreditVault is OwnableRoles, UUPSUpgradeable, Initializable, Reentrancy
             if (referralAmount > 0) {
                 address recipient = referralAddress[referralKey];
                 if (token == ETH) {
-                    SafeTransferLib.safeTransferETH(recipient, referralAmount);
+                    // If the referral recipient reverts (broken contract, non-payable),
+                    // skip the cut rather than blocking the payer. Protocol keeps it.
+                    (bool ok,) = recipient.call{value: referralAmount}("");
+                    if (!ok) referralAmount = 0;
                 } else {
                     SafeTransferLib.safeTransfer(token, recipient, referralAmount);
                 }
