@@ -193,7 +193,7 @@ contract CreditVault is OwnableRoles, UUPSUpgradeable, Initializable, Reentrancy
     // Multicall
     // -------------------------------------------------------------------------
 
-    function multicall(bytes[] calldata data) external nonReentrant returns (bytes[] memory results) {
+    function multicall(bytes[] calldata data) external returns (bytes[] memory results) {
         results = new bytes[](data.length);
         for (uint256 i; i < data.length; i++) {
             (bool ok, bytes memory result) = address(this).delegatecall(data[i]);
