@@ -653,20 +653,86 @@ contract FoundationTest is Test {
     }
 
     function test_fund_contributeFor_byBackend_succeeds() public {
-        // The backend contributes tokens into a user's account within their CharteredFund.
+        vm.prank(backend);
+        address fundAddress = root.charterFund(user, _mineSalt(user));
+        CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
+
+        uint256 amount = 1_000_000 * 1e18;
+        vm.prank(pepeWhale);
+        ERC20(PEPE).transfer(backend, amount);
+
+        vm.startPrank(backend);
+        ERC20(PEPE).approve(fundAddress, amount);
+        charteredFund.contributeFor(user, PEPE, amount);
+        vm.stopPrank();
+
+        bytes32 key = _getCustodyKey(user, PEPE);
+        (uint128 owned, uint128 escrow) = _splitAmount(charteredFund.custody(key));
+        assertEq(owned, amount, "sponsor deposit should credit user in fund");
+        assertEq(escrow, 0);
     }
 
     function test_fund_commit_movesBalance() public {
-        // After a contribute into a CharteredFund, the backend confirms credit.
-        // Checks that balance moves from userOwned to escrow in the CharteredFund's custody.
+        vm.prank(backend);
+        address fundAddress = root.charterFund(user, _mineSalt(user));
+        CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
+
+        uint256 amount = 2 ether;
+        vm.prank(user);
+        (bool ok,) = fundAddress.call{value: amount}("");
+        require(ok);
+
+        uint256 escrowAmt = amount / 2;
+        vm.prank(backend);
+        charteredFund.commit(fundAddress, user, address(0), escrowAmt, 0, 0, "");
+
+        bytes32 key = _getCustodyKey(user, address(0));
+        (uint128 owned, uint128 escrow) = _splitAmount(charteredFund.custody(key));
+        assertEq(owned, amount - escrowAmt, "owned should decrease by escrowed amount");
+        assertEq(escrow, escrowAmt, "escrow should equal committed amount");
     }
 
     function test_fund_requestRescission_userOwned_succeeds() public {
-        // A user with a CharteredFund rescinds their own userOwned balance from their fund.
+        vm.prank(backend);
+        address fundAddress = root.charterFund(user, _mineSalt(user));
+        CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
+
+        uint256 amount = 1 ether;
+        vm.prank(user);
+        (bool ok,) = fundAddress.call{value: amount}("");
+        require(ok);
+
+        uint256 balBefore = user.balance;
+        vm.prank(user);
+        charteredFund.requestRescission(address(0));
+
+        assertGt(user.balance, balBefore, "user should receive ETH back");
+        bytes32 key = _getCustodyKey(user, address(0));
+        (uint128 owned,) = _splitAmount(charteredFund.custody(key));
+        assertEq(owned, 0, "userOwned should be zero after rescission");
     }
 
     function test_fund_remit_byBackend_succeeds() public {
-        // Backend processes a remittance from a user's escrow balance within their CharteredFund.
+        vm.prank(backend);
+        address fundAddress = root.charterFund(user, _mineSalt(user));
+        CharteredFundImplementation charteredFund = CharteredFundImplementation(payable(fundAddress));
+
+        uint256 amount = 1 ether;
+        vm.prank(user);
+        (bool ok,) = fundAddress.call{value: amount}("");
+        require(ok);
+
+        vm.prank(backend);
+        charteredFund.commit(fundAddress, user, address(0), amount, 0, 0, "");
+
+        uint256 balBefore = user.balance;
+        vm.prank(backend);
+        charteredFund.remit(user, address(0), amount, 0, "");
+
+        assertEq(user.balance, balBefore + amount, "user should receive remitted ETH");
+        bytes32 key = _getCustodyKey(user, address(0));
+        (, uint128 escrow) = _splitAmount(charteredFund.custody(key));
+        assertEq(escrow, 0, "escrow should be zero after remit");
     }
 
 
@@ -678,19 +744,20 @@ contract FoundationTest is Test {
         require(success, "ETH contribute failed");
         vm.stopPrank();
 
-        // Freeze the contract
-        vm.startPrank(admin);
-        root.setFreeze(false);
-        vm.stopPrank();
-        assertFalse(root.marshalFrozen(), "Backend should be frozen");
+        // Freeze marshal operations — users must still be able to rescind their userOwned funds.
+        vm.prank(admin);
+        root.setFreeze(true);
+        assertTrue(root.marshalFrozen(), "Marshal operations should be frozen");
 
-        // User can still rescind
+        // User can still rescind their userOwned balance even when marshal ops are frozen.
         uint256 balance_before = user.balance;
-        vm.startPrank(user);
+        vm.prank(user);
         root.requestRescission(address(0));
-        uint256 balance_after = user.balance;
 
-        assertTrue(balance_after > balance_before, "User ETH balance should increase after rescission");
+        assertTrue(user.balance > balance_before, "User ETH balance should increase after rescission");
+        bytes32 key = _getCustodyKey(user, address(0));
+        (uint128 owned,) = _splitAmount(root.custody(key));
+        assertEq(owned, 0, "userOwned should be zero after rescission");
     }
 
     function test_fundRequestRescission_succeeds_whenFrozen() public {
@@ -706,19 +773,20 @@ contract FoundationTest is Test {
         require(success, "ETH contribute to fund failed");
         vm.stopPrank();
 
-        // 2. Freeze the root contract
-        vm.startPrank(admin);
-        root.setFreeze(false);
-        vm.stopPrank();
-        assertFalse(root.marshalFrozen(), "Backend should be frozen");
+        // 2. Freeze marshal operations — users must still be able to rescind from their fund.
+        vm.prank(admin);
+        root.setFreeze(true);
+        assertTrue(root.marshalFrozen(), "Marshal operations should be frozen");
 
-        // 3. User can still rescind from their fund
+        // 3. User can still rescind their userOwned balance from the fund.
         uint256 balance_before = user.balance;
-        vm.startPrank(user);
+        vm.prank(user);
         charteredFund.requestRescission(address(0));
-        uint256 balance_after = user.balance;
 
-        assertTrue(balance_after > balance_before, "User ETH balance should increase after fund rescission");
+        assertTrue(user.balance > balance_before, "User ETH balance should increase after fund rescission");
+        bytes32 key = _getCustodyKey(user, address(0));
+        (uint128 owned,) = _splitAmount(charteredFund.custody(key));
+        assertEq(owned, 0, "userOwned should be zero after rescission");
     }
 
     function test_onlyCharteredFund_modifier() public {

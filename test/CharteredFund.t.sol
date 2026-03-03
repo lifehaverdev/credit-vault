@@ -275,4 +275,80 @@ contract CharteredFundTest is Test {
         vm.expectRevert(); // Math()
         fund.sweepProtocolFees(address(0));
     }
+
+    /// @notice commit with charterFee AND protocolFee credits two independent custody slots.
+    ///         charterFee → fund.custody[hash(fund, token)].owned (withdrawn by fund owner)
+    ///         protocolFee → fund.custody[hash(foundation, token)].owned (swept by backend)
+    function test_commit_charterFeeAndProtocolFee_separateBuckets() public {
+        uint256 depositAmount = 3 ether;
+        uint256 escrowAmount  = 1 ether;
+        uint128 charterFee    = 0.5 ether;
+        uint128 protocolFee   = 0.5 ether;
+
+        vm.prank(user);
+        (bool ok,) = address(fund).call{value: depositAmount}("");
+        require(ok);
+
+        vm.prank(backend);
+        fund.commit(address(fund), user, address(0), escrowAmount, charterFee, protocolFee, "fees");
+
+        // Charter fee lands in fund's own custody slot
+        bytes32 charterKey = _getCustodyKey(address(fund), address(0));
+        (uint128 charterOwned,) = _splitAmount(fund.custody(charterKey));
+        assertEq(charterOwned, charterFee, "charterFee must credit fund's owned slot");
+
+        // Protocol fee lands in foundation's custody slot inside the fund
+        bytes32 foundationKey = _getCustodyKey(address(root), address(0));
+        (uint128 foundationOwned,) = _splitAmount(fund.custody(foundationKey));
+        assertEq(foundationOwned, protocolFee, "protocolFee must credit foundation's owned slot");
+
+        // User's escrow equals the committed escrowAmount
+        bytes32 userKey = _getCustodyKey(user, address(0));
+        (, uint128 userEscrow) = _splitAmount(fund.custody(userKey));
+        assertEq(userEscrow, escrowAmount, "user's escrow must equal committed amount");
+    }
+
+    /// @notice Liquidation fee path: remit(amount=0, fee=X) accumulates in protocol.escrow
+    ///         and can be fully extracted via allocate + remit.
+    function test_liquidation_feeAccumulatesAndCanBeExtracted() public {
+        uint256 deposit    = 2 ether;
+        uint128 liqFee     = 1 ether;
+
+        // user deposits ETH
+        vm.prank(user);
+        (bool ok,) = address(fund).call{value: deposit}("");
+        require(ok);
+
+        // commit the full balance to escrow
+        vm.prank(backend);
+        fund.commit(address(fund), user, address(0), deposit, 0, 0, "commit");
+
+        // liquidation: remit(amount=0, fee=liqFee) — fee goes into fund's custody[fund].escrow
+        vm.prank(backend);
+        fund.remit(user, address(0), 0, liqFee, "liquidation");
+
+        // Verify fund's own escrow slot holds the fee
+        bytes32 fundEscrowKey = _getCustodyKey(address(fund), address(0));
+        (, uint128 fundEsc) = _splitAmount(fund.custody(fundEscrowKey));
+        assertEq(fundEsc, liqFee, "liquidation fee must land in fund's escrow slot");
+
+        // Extract: allocate backend ← fund.escrow, then remit backend → backend
+        uint256 backendBefore = backend.balance;
+
+        vm.prank(backend);
+        fund.allocate(backend, address(0), liqFee);
+
+        bytes32 backendKey = _getCustodyKey(backend, address(0));
+        (, uint128 backendEsc) = _splitAmount(fund.custody(backendKey));
+        assertEq(backendEsc, liqFee, "allocate must credit backend's escrow");
+
+        vm.prank(backend);
+        fund.remit(backend, address(0), liqFee, 0, "extract");
+
+        assertEq(backend.balance, backendBefore + liqFee, "backend must receive extracted fee");
+
+        // fund escrow must be zeroed
+        (, uint128 fundEscAfter) = _splitAmount(fund.custody(fundEscrowKey));
+        assertEq(fundEscAfter, 0, "fund escrow must be zeroed after extraction");
+    }
 }

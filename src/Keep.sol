@@ -97,6 +97,7 @@ abstract contract Keep {
         address token,
         uint256 amount
     ) internal {
+        if (amount > type(uint128).max) revert Math();
         bytes32 key = _getCustodyKey(user, token);
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
         // sponsor must already have allowance.
@@ -125,6 +126,7 @@ abstract contract Keep {
 
     /// @dev Adjust custody mapping for an ETH contribution.
     function _receiveETH(address from, uint256 value) internal {
+        if (value > type(uint128).max) revert Math();
         bytes32 key = _getCustodyKey(from, address(0));
         (uint128 userOwned, uint128 escrow) = _splitAmount(custody[key]);
         custody[key] = _packAmount(userOwned + uint128(value), escrow);

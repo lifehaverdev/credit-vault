@@ -109,8 +109,8 @@ contract Foundation is Keep, UUPSUpgradeable, Initializable, ReentrancyGuard {
     ///      The NFT address is hardcoded as 0xB24BaB1732D34cAD0A7C7035C3539aEC553bF3a0.
     ///      If the token is transferred, contract control transfers with it. 
     modifier onlyOwner() {
-        (, bytes memory data) = ownerNFT.call(abi.encodeWithSelector(0x6352211e, ownerTokenId));
-        if(abi.decode(data, (address)) != msg.sender) revert Auth();
+        (bool ok, bytes memory data) = ownerNFT.staticcall(abi.encodeWithSelector(0x6352211e, ownerTokenId));
+        if (!ok || data.length == 0 || abi.decode(data, (address)) != msg.sender) revert Auth();
         _;
     }
 
@@ -266,7 +266,7 @@ contract Foundation is Keep, UUPSUpgradeable, Initializable, ReentrancyGuard {
         emit ContributionRecorded(address(this), user, token, amount);
     }
 
-    function recordContribution(address user, address token, uint256 amount) external payable onlyCharteredFund nonReentrant {
+    function recordContribution(address user, address token, uint256 amount) external onlyCharteredFund nonReentrant {
         emit ContributionRecorded(msg.sender, user, token, amount);
     }
 
@@ -327,8 +327,8 @@ contract Foundation is Keep, UUPSUpgradeable, Initializable, ReentrancyGuard {
             uint256 remainingOwned = ownedBefore - escrowAmount;
             if (fee > remainingOwned) revert Math();
             bytes32 accountKey = _getCustodyKey(address(this), token);
-            (, uint128 accountEscrow) = _splitAmount(custody[accountKey]);
-            custody[accountKey] = _packAmount(0, accountEscrow + fee);
+            (uint128 accountOwned, uint128 accountEscrow) = _splitAmount(custody[accountKey]);
+            custody[accountKey] = _packAmount(accountOwned, accountEscrow + fee);
         }
         emit CommitmentConfirmed(fundAddress, user, token, escrowAmount, fee, metadata);
     }
@@ -353,6 +353,21 @@ contract Foundation is Keep, UUPSUpgradeable, Initializable, ReentrancyGuard {
         bytes32 key = _getCustodyKey(address(this), token);
         (uint128 owned, uint128 escrow) = _splitAmount(custody[key]);
         custody[key] = _packAmount(owned, escrow + uint128(amount));
+    }
+
+    /// @notice Withdraw accumulated protocol-owned funds (donations, recoverProtocolOwned credits)
+    ///         to the owner's wallet. Decrements custody[Foundation][token].owned and transfers.
+    function withdrawProtocolOwned(address token, uint256 amount) external onlyOwner nonReentrant {
+        if (amount == 0) revert Math();
+        bytes32 key = _getCustodyKey(address(this), token);
+        (uint128 owned, uint128 escrow) = _splitAmount(custody[key]);
+        if (owned < amount) revert Math();
+        custody[key] = _packAmount(owned - uint128(amount), escrow);
+        if (token == address(0)) {
+            SafeTransferLib.safeTransferETH(msg.sender, amount);
+        } else {
+            SafeTransferLib.safeTransfer(token, msg.sender, amount);
+        }
     }
 
     /// @notice Restores protocol.owned accounting corrupted by the pre-fix _allocate/_remit
@@ -408,10 +423,4 @@ contract Foundation is Keep, UUPSUpgradeable, Initializable, ReentrancyGuard {
         _setCharterBeacon(_charterBeacon);
     }
 
-    /// @dev One-time function to take ownership of the `charterBeacon` after
-    ///      deployment. Must be called by the current beacon owner.
-    function adoptBeacon() external {
-        UpgradeableBeacon(charterBeacon).transferOwnership(address(this));
-    }
-
-} 
+}

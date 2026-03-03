@@ -115,8 +115,8 @@ contract MineFoundationProxySalt is Script {
         console.log("Target prefix (uint):", target);
         console.log("Digits to match:", digits);
 
-        uint256 start = vm.envOr("START", uint256(628_000*2));
-        uint256 end   = vm.envOr("END",   uint256(628_000*3));
+        uint256 start = vm.envOr("START", uint256(628_000*4));
+        uint256 end   = vm.envOr("END",   uint256(628_000*5));
 
         vm.startBroadcast();
         vm.pauseGasMetering();

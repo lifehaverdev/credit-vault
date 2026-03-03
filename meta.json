@@ -1,0 +1,1247 @@
+{
+  "compiler": {
+    "version": "0.8.30+commit.73712a01"
+  },
+  "language": "Solidity",
+  "output": {
+    "abi": [
+      {
+        "inputs": [],
+        "type": "error",
+        "name": "AlreadyInit"
+      },
+      {
+        "inputs": [],
+        "type": "error",
+        "name": "Auth"
+      },
+      {
+        "inputs": [],
+        "type": "error",
+        "name": "Fail"
+      },
+      {
+        "inputs": [],
+        "type": "error",
+        "name": "InvalidBeacon"
+      },
+      {
+        "inputs": [],
+        "type": "error",
+        "name": "InvalidInitialization"
+      },
+      {
+        "inputs": [],
+        "type": "error",
+        "name": "Math"
+      },
+      {
+        "inputs": [],
+        "type": "error",
+        "name": "NotInitializing"
+      },
+      {
+        "inputs": [],
+        "type": "error",
+        "name": "Reentrancy"
+      },
+      {
+        "inputs": [],
+        "type": "error",
+        "name": "UnauthorizedCallContext"
+      },
+      {
+        "inputs": [],
+        "type": "error",
+        "name": "UpgradeFailed"
+      },
+      {
+        "inputs": [],
+        "type": "error",
+        "name": "Vanity"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "fundAddress",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "address",
+            "name": "user",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256",
+            "indexed": false
+          },
+          {
+            "internalType": "uint128",
+            "name": "fee",
+            "type": "uint128",
+            "indexed": false
+          },
+          {
+            "internalType": "bytes",
+            "name": "metadata",
+            "type": "bytes",
+            "indexed": false
+          }
+        ],
+        "type": "event",
+        "name": "CommitmentConfirmed",
+        "anonymous": false
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "fundAddress",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "address",
+            "name": "user",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256",
+            "indexed": false
+          }
+        ],
+        "type": "event",
+        "name": "ContributionRecorded",
+        "anonymous": false
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "fundAddress",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "address",
+            "name": "user",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256",
+            "indexed": false
+          }
+        ],
+        "type": "event",
+        "name": "ContributionRescinded",
+        "anonymous": false
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "funder",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256",
+            "indexed": false
+          },
+          {
+            "internalType": "bool",
+            "name": "isNFT",
+            "type": "bool",
+            "indexed": false
+          },
+          {
+            "internalType": "bytes32",
+            "name": "metadata",
+            "type": "bytes32",
+            "indexed": false
+          }
+        ],
+        "type": "event",
+        "name": "Donation",
+        "anonymous": false
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "fundAddress",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "address",
+            "name": "owner",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "bytes32",
+            "name": "salt",
+            "type": "bytes32",
+            "indexed": false
+          }
+        ],
+        "type": "event",
+        "name": "FundChartered",
+        "anonymous": false
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "uint64",
+            "name": "version",
+            "type": "uint64",
+            "indexed": false
+          }
+        ],
+        "type": "event",
+        "name": "Initialized",
+        "anonymous": false
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "fundAddress",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "address",
+            "name": "user",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "uint256",
+            "name": "fee",
+            "type": "uint256",
+            "indexed": false
+          },
+          {
+            "internalType": "bytes",
+            "name": "metadata",
+            "type": "bytes",
+            "indexed": false
+          }
+        ],
+        "type": "event",
+        "name": "Liquidation",
+        "anonymous": false
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "marshal",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "bool",
+            "name": "isAuthorized",
+            "type": "bool",
+            "indexed": false
+          }
+        ],
+        "type": "event",
+        "name": "MarshalStatusChanged",
+        "anonymous": false
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "bool",
+            "name": "isFrozen",
+            "type": "bool",
+            "indexed": false
+          }
+        ],
+        "type": "event",
+        "name": "OperatorFreeze",
+        "anonymous": false
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "bool",
+            "name": "isRefund",
+            "type": "bool",
+            "indexed": false
+          }
+        ],
+        "type": "event",
+        "name": "RefundChanged",
+        "anonymous": false
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "fundAddress",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "address",
+            "name": "user",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256",
+            "indexed": false
+          },
+          {
+            "internalType": "uint128",
+            "name": "fee",
+            "type": "uint128",
+            "indexed": false
+          },
+          {
+            "internalType": "bytes",
+            "name": "metadata",
+            "type": "bytes",
+            "indexed": false
+          }
+        ],
+        "type": "event",
+        "name": "RemittanceProcessed",
+        "anonymous": false
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "fundAddress",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "address",
+            "name": "user",
+            "type": "address",
+            "indexed": true
+          },
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address",
+            "indexed": true
+          }
+        ],
+        "type": "event",
+        "name": "RescissionRequested",
+        "anonymous": false
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "implementation",
+            "type": "address",
+            "indexed": true
+          }
+        ],
+        "type": "event",
+        "name": "Upgraded",
+        "anonymous": false
+      },
+      {
+        "inputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "adoptBeacon"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "user",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "allocate"
+      },
+      {
+        "inputs": [],
+        "stateMutability": "view",
+        "type": "function",
+        "name": "charterBeacon",
+        "outputs": [
+          {
+            "internalType": "address",
+            "name": "",
+            "type": "address"
+          }
+        ]
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "_owner",
+            "type": "address"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "_salt",
+            "type": "bytes32"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "charterFund",
+        "outputs": [
+          {
+            "internalType": "address",
+            "name": "fund",
+            "type": "address"
+          }
+        ]
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "fundAddress",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "user",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "escrowAmount",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint128",
+            "name": "fee",
+            "type": "uint128"
+          },
+          {
+            "internalType": "bytes",
+            "name": "metadata",
+            "type": "bytes"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "commit"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "_owner",
+            "type": "address"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "_salt",
+            "type": "bytes32"
+          }
+        ],
+        "stateMutability": "view",
+        "type": "function",
+        "name": "computeCharterAddress",
+        "outputs": [
+          {
+            "internalType": "address",
+            "name": "",
+            "type": "address"
+          }
+        ]
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "contribute"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "user",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "contributeFor"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "bytes32",
+            "name": "",
+            "type": "bytes32"
+          }
+        ],
+        "stateMutability": "view",
+        "type": "function",
+        "name": "custody",
+        "outputs": [
+          {
+            "internalType": "bytes32",
+            "name": "",
+            "type": "bytes32"
+          }
+        ]
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "metadata",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "bool",
+            "name": "isNFT",
+            "type": "bool"
+          }
+        ],
+        "stateMutability": "payable",
+        "type": "function",
+        "name": "donate"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "_ownerNFT",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "_ownerTokenId",
+            "type": "uint256"
+          },
+          {
+            "internalType": "address",
+            "name": "_charterBeacon",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "initialize"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view",
+        "type": "function",
+        "name": "isCharteredFund",
+        "outputs": [
+          {
+            "internalType": "bool",
+            "name": "",
+            "type": "bool"
+          }
+        ]
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "view",
+        "type": "function",
+        "name": "isMarshal",
+        "outputs": [
+          {
+            "internalType": "bool",
+            "name": "",
+            "type": "bool"
+          }
+        ]
+      },
+      {
+        "inputs": [],
+        "stateMutability": "view",
+        "type": "function",
+        "name": "marshalFrozen",
+        "outputs": [
+          {
+            "internalType": "bool",
+            "name": "",
+            "type": "bool"
+          }
+        ]
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "bytes[]",
+            "name": "data",
+            "type": "bytes[]"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "multicall"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "from",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "",
+            "type": "uint256"
+          },
+          {
+            "internalType": "bytes",
+            "name": "",
+            "type": "bytes"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "onERC721Received",
+        "outputs": [
+          {
+            "internalType": "bytes4",
+            "name": "",
+            "type": "bytes4"
+          }
+        ]
+      },
+      {
+        "inputs": [],
+        "stateMutability": "view",
+        "type": "function",
+        "name": "ownerNFT",
+        "outputs": [
+          {
+            "internalType": "address",
+            "name": "",
+            "type": "address"
+          }
+        ]
+      },
+      {
+        "inputs": [],
+        "stateMutability": "view",
+        "type": "function",
+        "name": "ownerTokenId",
+        "outputs": [
+          {
+            "internalType": "uint256",
+            "name": "",
+            "type": "uint256"
+          }
+        ]
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "target",
+            "type": "address"
+          },
+          {
+            "internalType": "bytes",
+            "name": "data",
+            "type": "bytes"
+          }
+        ],
+        "stateMutability": "payable",
+        "type": "function",
+        "name": "performCalldata"
+      },
+      {
+        "inputs": [],
+        "stateMutability": "view",
+        "type": "function",
+        "name": "proxiableUUID",
+        "outputs": [
+          {
+            "internalType": "bytes32",
+            "name": "",
+            "type": "bytes32"
+          }
+        ]
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "fundAddress",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "user",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "escrowAmount",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint128",
+            "name": "fee",
+            "type": "uint128"
+          },
+          {
+            "internalType": "bytes",
+            "name": "metadata",
+            "type": "bytes"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "recordCommitment"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "user",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256"
+          }
+        ],
+        "stateMutability": "payable",
+        "type": "function",
+        "name": "recordContribution"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "funder",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256"
+          },
+          {
+            "internalType": "bool",
+            "name": "isNFT",
+            "type": "bool"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "metadata",
+            "type": "bytes32"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "recordDonation"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "user",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint128",
+            "name": "fee",
+            "type": "uint128"
+          },
+          {
+            "internalType": "bytes",
+            "name": "metadata",
+            "type": "bytes"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "recordRemittance"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "user",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "recordRescissionRequest"
+      },
+      {
+        "inputs": [],
+        "stateMutability": "view",
+        "type": "function",
+        "name": "refund",
+        "outputs": [
+          {
+            "internalType": "bool",
+            "name": "",
+            "type": "bool"
+          }
+        ]
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "user",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "amount",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint128",
+            "name": "fee",
+            "type": "uint128"
+          },
+          {
+            "internalType": "bytes",
+            "name": "metadata",
+            "type": "bytes"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "remit"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "token",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "requestRescission"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "bool",
+            "name": "isFrozen",
+            "type": "bool"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "setFreeze"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "_marshal",
+            "type": "address"
+          },
+          {
+            "internalType": "bool",
+            "name": "_isAuthorized",
+            "type": "bool"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "setMarshal"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "bool",
+            "name": "_refund",
+            "type": "bool"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "setRefund"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "newImpl",
+            "type": "address"
+          }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+        "name": "upgradeCharterImplementation"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "address",
+            "name": "newImplementation",
+            "type": "address"
+          },
+          {
+            "internalType": "bytes",
+            "name": "data",
+            "type": "bytes"
+          }
+        ],
+        "stateMutability": "payable",
+        "type": "function",
+        "name": "upgradeToAndCall"
+      },
+      {
+        "inputs": [],
+        "stateMutability": "payable",
+        "type": "receive"
+      }
+    ],
+    "devdoc": {
+      "kind": "dev",
+      "methods": {
+        "adoptBeacon()": {
+          "details": "One-time function to take ownership of the `charterBeacon` after      deployment. Must be called by the current beacon owner."
+        },
+        "computeCharterAddress(address,bytes32)": {
+          "params": {
+            "_owner": "The future owner (unused in address derivation but preserved for API compatibility).",
+            "_salt": "The 32-byte salt for the CREATE2 operation."
+          },
+          "returns": {
+            "_0": "The computed address of the new chartered fund."
+          }
+        },
+        "contributeFor(address,address,uint256)": {
+          "details": "Anyone can act as a sponsor; tokens are pulled from `msg.sender`."
+        },
+        "onERC721Received(address,address,uint256,bytes)": {
+          "details": "Returns the selector required to accept ERC721s"
+        },
+        "proxiableUUID()": {
+          "details": "Returns the storage slot used by the implementation, as specified in [ERC1822](https://eips.ethereum.org/EIPS/eip-1822). Note: The `notDelegated` modifier prevents accidental upgrades to an implementation that is a proxy contract."
+        },
+        "upgradeToAndCall(address,bytes)": {
+          "details": "Upgrades the proxy's implementation to `newImplementation`. Emits a {Upgraded} event. Note: Passing in empty `data` skips the delegatecall to `newImplementation`."
+        }
+      },
+      "version": 1
+    },
+    "userdoc": {
+      "kind": "user",
+      "methods": {
+        "computeCharterAddress(address,bytes32)": {
+          "notice": "Computes the expected address for a new chartered fund without deploying it."
+        },
+        "contributeFor(address,address,uint256)": {
+          "notice": "Sponsor deposits `amount` of `token` on behalf of `user`."
+        },
+        "initialize(address,uint256,address)": {
+          "notice": "Initialization ///"
+        },
+        "onERC721Received(address,address,uint256,bytes)": {
+          "notice": "Handles ERC721 token transfers into the vault"
+        }
+      },
+      "version": 1
+    }
+  },
+  "settings": {
+    "remappings": [
+      "@openzeppelin/contracts/=lib/createx/lib/openzeppelin-contracts/contracts/",
+      "createx-forge/=lib/createx-forge/",
+      "createx/=lib/createx/src/",
+      "ds-test/=lib/forge-std/lib/ds-test/src/",
+      "erc4626-tests/=lib/createx/lib/openzeppelin-contracts/lib/erc4626-tests/",
+      "forge-std/=lib/forge-std/src/",
+      "openzeppelin-contracts/=lib/createx/lib/openzeppelin-contracts/",
+      "openzeppelin/=lib/createx/lib/openzeppelin-contracts/contracts/",
+      "previous/=src/previous_disabled/",
+      "solady/=lib/solady/src/"
+    ],
+    "optimizer": {
+      "enabled": true,
+      "runs": 1000
+    },
+    "metadata": {
+      "bytecodeHash": "ipfs"
+    },
+    "compilationTarget": {
+      "src/Foundation.sol": "Foundation"
+    },
+    "evmVersion": "paris",
+    "libraries": {}
+  },
+  "sources": {
+    "lib/solady/src/auth/Ownable.sol": {
+      "keccak256": "0xc208cdd9de02bbf4b5edad18b88e23a2be7ff56d2287d5649329dc7cda64b9a3",
+      "urls": [
+        "bzz-raw://e8fba079cc7230c617f7493a2e97873f88e59a53a5018fcb2e2b6ac42d8aa5a3",
+        "dweb:/ipfs/QmTXg8GSt8hsK2cZhbPFrund1mrwVdkLQmEPoQaFy4fhjs"
+      ],
+      "license": "MIT"
+    },
+    "lib/solady/src/utils/CallContextChecker.sol": {
+      "keccak256": "0xc54c743a03f4909826712e9c6b683ca95e8b0c120c55284a9e3572621ebd734b",
+      "urls": [
+        "bzz-raw://3d3138009aba3d2fd310636f3cc1d6029e970c57ddb74693bebf2a02d3e6f12d",
+        "dweb:/ipfs/QmauMpcVDyQqVnAUF75DXy831LvtxyFS7GND7kge1Zgw55"
+      ],
+      "license": "MIT"
+    },
+    "lib/solady/src/utils/Initializable.sol": {
+      "keccak256": "0x58ee7b2e966232ca1ca9e9e705d8afcefa83fe29d37d6f8361d73015a9db1fe4",
+      "urls": [
+        "bzz-raw://59f134cb038e0a547f0a3dbfe9c9b6939f7b39dff64646a79e8cf2dd6ba14f80",
+        "dweb:/ipfs/QmfXt149JQEWsYbLUkS9iLP6kGZqzHYyMg7SsLUUPgafEb"
+      ],
+      "license": "MIT"
+    },
+    "lib/solady/src/utils/LibClone.sol": {
+      "keccak256": "0x1b96fd03a3948155bd2fe95dc4980930c759b174026e18f11bc8e88d55ae030e",
+      "urls": [
+        "bzz-raw://64998d16472a127031ee6a796ed9afcf13dd662afd30eb4d3e2a42c2bc9fd204",
+        "dweb:/ipfs/QmTXHGy9t8YTW96tjiZ8RBqmijXUTqc1JznEBqHv8Duc4A"
+      ],
+      "license": "MIT"
+    },
+    "lib/solady/src/utils/ReentrancyGuard.sol": {
+      "keccak256": "0xdb28f318ec45197a6c7cc2abebed67d7cb8b965838ef962e3844423256a9ddb8",
+      "urls": [
+        "bzz-raw://873cd46b77a2aeb781e7a0d131e7299151323ed884c330101a51d0727e218d98",
+        "dweb:/ipfs/QmddadCjyedztvdSgLZEyKWoRes2SqtpviSjhEbSNrkUoi"
+      ],
+      "license": "MIT"
+    },
+    "lib/solady/src/utils/SafeTransferLib.sol": {
+      "keccak256": "0x960d5b7ca568a090c4a7785ddfd88f6ce135ced94f5c79c34e5519a71772a817",
+      "urls": [
+        "bzz-raw://b2dd81d9b7c0e8cd1ba3b84b8d3b3c937e3b942b626e4d5ab4ad454a07666396",
+        "dweb:/ipfs/QmcLh9t8qgojjnziKzDfZXNtbsmvsQMRgd9nHds9ZmP668"
+      ],
+      "license": "MIT"
+    },
+    "lib/solady/src/utils/UUPSUpgradeable.sol": {
+      "keccak256": "0x63899eaf1a24713464b8084ada33a83c4b7db789fe83ae22f016e39646bee361",
+      "urls": [
+        "bzz-raw://617fa735ffa8ba31051745614a508abd69d2cfc1b1bc1eb3c772865db5f7ce65",
+        "dweb:/ipfs/QmR1pQbHPyXcLbFm2vHrXBs1qRFrGC22gF7wWYamYy8aaE"
+      ],
+      "license": "MIT"
+    },
+    "lib/solady/src/utils/UpgradeableBeacon.sol": {
+      "keccak256": "0xeb2ba1bd813b886f51233c05668c6cf9a65d7003fc84d0f48d8bf3e20dfa9177",
+      "urls": [
+        "bzz-raw://4c53f0d17bbd2cfe12866562a234cf6ab61ea412caab8a2819619dcce3c2941b",
+        "dweb:/ipfs/QmQS6AewSsfSvn6s5dihXaJzai5yWn3uNpw1T4FUtWkrvW"
+      ],
+      "license": "MIT"
+    },
+    "lib/solady/src/utils/ext/zksync/ERC1967BeaconProxy.sol": {
+      "keccak256": "0x7aa910af2f37125ea9947490ffb590f6a4828327a30cf1c0f2c3bf004bd3d75b",
+      "urls": [
+        "bzz-raw://2c44def8f72f62f5f03ef253d9d0ef2473888e5bf6516f62875cc37a454ca0d9",
+        "dweb:/ipfs/QmWc1uaeQNhrR8qtHREyEzbtD1zkQJ1ct1UXA85JiHsm3a"
+      ],
+      "license": "MIT"
+    },
+    "src/CharteredFundImplementation.sol": {
+      "keccak256": "0xbdd4c529e270ff3dfff1ad3d7d736222ce377aa0bca7ddfd4f0edb91eaee8f4a",
+      "urls": [
+        "bzz-raw://320e3c5da9564f885fb6354ea78780fb288c2149363309221b5a0310238b8f6e",
+        "dweb:/ipfs/QmUTBwckFF1rSEDSqMHLP6zgZvAZF8EnZoq5GCtVZEad8X"
+      ],
+      "license": "MIT"
+    },
+    "src/Foundation.sol": {
+      "keccak256": "0x5a587179499ffb9ff1a5877b67e344d28a07519e36158fbf0f7d1a42dede1666",
+      "urls": [
+        "bzz-raw://0576e7334339d2003041d933608d460b6548ba588d373843ba286428b8a31f58",
+        "dweb:/ipfs/QmVYogRkPL7QWnKmkihDcR5G3CuCA2RpzZJWUDwuf4daNQ"
+      ],
+      "license": "MIT"
+    },
+    "src/Keep.sol": {
+      "keccak256": "0xc4fea46f63193017157b0df909f8c6e518a800dc5aaf3ba3702b4269ade0412b",
+      "urls": [
+        "bzz-raw://9fb412f25dddbda97d0ecc2f45da8375a06416e40523ca3c9a1e38e15d66a27f",
+        "dweb:/ipfs/QmdDpBnR942B3FTfxrmGmVUood2LmmD5LMknhn7jurt5as"
+      ],
+      "license": "MIT"
+    },
+    "src/interfaces/IFoundation.sol": {
+      "keccak256": "0x47cf3e16253db89d6c5a46a4d31805621f254971abbf9f542bfc6b3bcfde1d96",
+      "urls": [
+        "bzz-raw://cb404895cc6e1f92404fbfa5e983718ceebe0ac6fb196017bb8ece580f2cc410",
+        "dweb:/ipfs/QmaquA5PZb9JUr7FCZp9iaNVGo3vZuYwe9yVQE9qCvuFt3"
+      ],
+      "license": "MIT"
+    }
+  },
+  "version": 1
+}

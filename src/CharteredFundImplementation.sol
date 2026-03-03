@@ -261,6 +261,14 @@ contract CharteredFundImplementation is Keep, Ownable, ReentrancyGuard {
         }
     }
 
+    /// @notice Marshal-accessible external call relay.
+    ///         Allows marshals to trigger calls on this fund or on external targets
+    ///         (e.g., sweepProtocolFees, ERC20 interactions) from the fund's msg.sender context.
+    function marshalCall(address target, bytes calldata data) external onlyMarshal {
+        (bool ok, ) = target.call(data);
+        if (!ok) revert Fail();
+    }
+
     function performCalldata(address target, bytes calldata data) external payable onlyOwner {
         (bool success, ) = target.call{value: msg.value}(data);
         if (!success) revert Fail();

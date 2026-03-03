@@ -19,10 +19,10 @@ forge build
 
 # Write ABIs to the bot directory
 forge inspect src/Foundation.sol:Foundation abi --json > "$BOT_ABI_PATH/foundation.json"
-forge inspect src/CharteredFund.sol:CharteredFund abi --json > "$BOT_ABI_PATH/charteredFund.json"
+forge inspect src/CharteredFundImplementation.sol:CharteredFundImplementation abi --json > "$BOT_ABI_PATH/charteredFund.json"
 # Write bytecode to the bot directory/bytecode
 mkdir -p "$BOT_ABI_PATH/bytecode"
 forge inspect src/Foundation.sol:Foundation bytecode --json > "$BOT_ABI_PATH/bytecode/foundation.bytecode.json"
-forge inspect src/CharteredFund.sol:CharteredFund bytecode --json > "$BOT_ABI_PATH/bytecode/charteredFund.bytecode.json"
+forge inspect src/CharteredFundImplementation.sol:CharteredFundImplementation bytecode --json > "$BOT_ABI_PATH/bytecode/charteredFund.bytecode.json"
 
 echo "ABIs written to $BOT_ABI_PATH and bytecode written to $BOT_ABI_PATH/bytecode"

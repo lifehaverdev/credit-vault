@@ -149,4 +149,127 @@ contract AdminSeizureTest is Test {
         (, uint128 esc) = _splitAmount(fund.custody(_getCustodyKey(user1, address(0))));
         assertEq(esc, 0, "user1 charter fund escrow must be zero");
     }
+
+    /// @notice Partial seizure: commit full balance but only remit a fraction as fee.
+    ///         Remaining escrow stays with the user and can be reallocated later.
+    function test_foundation_partialLiquidation_leavesRemainder() public {
+        uint256 deposit = 2 ether;
+        uint256 seizure = 0.5 ether;
+
+        vm.prank(user1);
+        (bool ok,) = address(root).call{value: deposit}("");
+        require(ok);
+
+        bytes[] memory calls = new bytes[](2);
+        calls[0] = abi.encodeCall(Foundation.commit, (address(root), user1, address(0), deposit, 0, "PARTIAL_SEIZURE"));
+        calls[1] = abi.encodeCall(Foundation.remit,  (user1, address(0), 0, uint128(seizure), "PARTIAL_SEIZURE"));
+
+        vm.prank(backend, backend);
+        root.multicall(calls);
+
+        // User's escrow should have the remainder, not zero
+        (, uint128 remaining) = _splitAmount(root.custody(_getCustodyKey(user1, address(0))));
+        assertEq(remaining, deposit - seizure, "remaining escrow must equal deposit minus seizure");
+
+        // Protocol's escrow must reflect the seized amount
+        (, uint128 protocolEsc) = _splitAmount(root.custody(_getCustodyKey(address(root), address(0))));
+        assertEq(protocolEsc, seizure, "protocol escrow must hold the seized amount");
+    }
+
+    /// @notice When remit has fee>0 AND amount>0 no Liquidation event fires (it's a regular fee-bearing payment).
+    function test_remit_feeAndAmount_noLiquidationEvent() public {
+        // user1's derived address has contract code on mainnet; clear it so ETH transfers succeed.
+        vm.etch(user1, bytes(""));
+
+        uint256 deposit = 2 ether;
+
+        vm.prank(user1);
+        (bool ok,) = address(root).call{value: deposit}("");
+        require(ok);
+
+        // Commit full balance to escrow
+        vm.prank(backend);
+        root.commit(address(root), user1, address(0), deposit, 0, "");
+
+        // Remit half as payment + half as fee — should NOT emit Liquidation
+        uint128 payment = 1 ether;
+        uint128 fee     = 1 ether;
+
+        vm.recordLogs();
+        vm.prank(backend);
+        root.remit(user1, address(0), payment, fee, "WITH_FEE");
+
+        // Scan emitted logs — none should be a Liquidation event
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 liquidationTopic = keccak256("Liquidation(address,address,address,uint256,bytes)");
+        for (uint256 i = 0; i < logs.length; i++) {
+            assertFalse(
+                logs[i].topics[0] == liquidationTopic,
+                "Liquidation event must NOT fire when amount > 0"
+            );
+        }
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // marshalCall — marshal-accessible external call relay on CharteredFund
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// @notice Marshal uses fund.marshalCall to call a Foundation function that requires
+    ///         onlyCharteredFund — the fund is the msg.sender so the access check passes.
+    ///         This is the primary use-case: triggering Foundation functions from the fund's context.
+    function test_marshalCall_canCallFoundationAsCharteredFund() public {
+        // Foundation.recordDonation is onlyCharteredFund.
+        // A direct backend call would fail (backend is not a chartered fund).
+        // Via fund.marshalCall the fund is msg.sender → passes onlyCharteredFund.
+        bytes memory callData = abi.encodeCall(
+            Foundation.recordDonation,
+            (user1, address(0), 1 ether, false, bytes32(0))
+        );
+
+        vm.expectEmit(true, true, true, true, address(root));
+        emit Foundation.Donation(user1, address(0), 1 ether, false, bytes32(0));
+
+        vm.prank(backend);
+        fund.marshalCall(address(root), callData);
+    }
+
+    /// @notice marshalCall reverts Auth() when caller is not a marshal.
+    function test_marshalCall_revertsForNonMarshal() public {
+        vm.prank(user1);
+        vm.expectRevert(bytes4(keccak256("Auth()")));
+        fund.marshalCall(address(fund), "");
+    }
+
+    /// @notice marshalCall propagates Fail() when the inner call reverts.
+    function test_marshalCall_propagatesRevert() public {
+        // sweepProtocolFees with zero accumulated reverts Math() — bubbles as Fail()
+        bytes memory callData = abi.encodeCall(CharteredFundImplementation.sweepProtocolFees, (address(0)));
+        vm.prank(backend);
+        vm.expectRevert(bytes4(keccak256("Fail()")));
+        fund.marshalCall(address(fund), callData);
+    }
+
+    /// @notice multicall must revert with Auth() when called from a contract (not an EOA).
+    function test_multicall_revertsWhenCalledFromContract() public {
+        // A contract calling multicall: msg.sender != tx.origin, so Auth() fires.
+        MultiCallContract caller = new MultiCallContract(address(root));
+
+        // Register the contract as a marshal so the onlyMarshal check passes,
+        // allowing us to isolate the msg.sender != tx.origin guard.
+        vm.prank(admin);
+        root.setMarshal(address(caller), true);
+
+        bytes[] memory calls = new bytes[](0);
+        vm.expectRevert(bytes4(keccak256("Auth()")));
+        caller.doMulticall(calls);
+    }
+}
+
+/// @dev Helper contract that calls Foundation.multicall on behalf of tests.
+contract MultiCallContract {
+    Foundation public foundation;
+    constructor(address _foundation) { foundation = Foundation(payable(_foundation)); }
+    function doMulticall(bytes[] calldata calls) external {
+        foundation.multicall(calls);
+    }
 }
