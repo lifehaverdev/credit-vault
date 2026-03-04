@@ -17,12 +17,7 @@ fi
 # Build contracts (optional, but ensures ABI is up to date)
 forge build
 
-# Write ABIs to the bot directory
-forge inspect src/Foundation.sol:Foundation abi --json > "$BOT_ABI_PATH/foundation.json"
-forge inspect src/CharteredFundImplementation.sol:CharteredFundImplementation abi --json > "$BOT_ABI_PATH/charteredFund.json"
-# Write bytecode to the bot directory/bytecode
-mkdir -p "$BOT_ABI_PATH/bytecode"
-forge inspect src/Foundation.sol:Foundation bytecode --json > "$BOT_ABI_PATH/bytecode/foundation.bytecode.json"
-forge inspect src/CharteredFundImplementation.sol:CharteredFundImplementation bytecode --json > "$BOT_ABI_PATH/bytecode/charteredFund.bytecode.json"
+# Write ABI to the bot directory
+forge inspect src/CreditVault.sol:CreditVault abi --json > "$BOT_ABI_PATH/creditVault.json"
 
-echo "ABIs written to $BOT_ABI_PATH and bytecode written to $BOT_ABI_PATH/bytecode"
+echo "CreditVault ABI written to $BOT_ABI_PATH/creditVault.json"

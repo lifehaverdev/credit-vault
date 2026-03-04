@@ -207,10 +207,7 @@ contract CreditVault is OwnableRoles, UUPSUpgradeable, Initializable, Reentrancy
     // -------------------------------------------------------------------------
 
     /// @notice Batch multiple calls in a single transaction via delegatecall.
-    /// @dev Do NOT batch payETH calls — delegatecall does not split msg.value across sub-calls.
-    ///      Each delegatecalled payETH sub-call sees the full original msg.value.
-    ///      Only ERC20 pay() calls are safe to batch.
-    function multicall(bytes[] calldata data) external returns (bytes[] memory results) {
+    function multicall(bytes[] calldata data) external onlyOwner returns (bytes[] memory results) {
         results = new bytes[](data.length);
         for (uint256 i; i < data.length; i++) {
             (bool ok, bytes memory result) = address(this).delegatecall(data[i]);

@@ -454,18 +454,34 @@ contract CreditVaultTest is Test {
     // Multicall
     // =========================================================================
 
-    function test_multicall_batchesPayments() public {
+    function test_multicall_onlyOwner() public {
+        // Fund vault with ETH and ERC20
+        vm.deal(alice, 2 ether);
+        vm.prank(alice);
+        vault.payETH{value: 2 ether}(bytes32(0));
+
         vm.startPrank(alice);
-        token.approve(address(vault), 200e18);
-
-        bytes[] memory calls = new bytes[](2);
-        calls[0] = abi.encodeCall(vault.pay, (address(token), 100e18, bytes32(0)));
-        calls[1] = abi.encodeCall(vault.pay, (address(token), 100e18, bytes32(0)));
-
-        vault.multicall(calls);
+        token.approve(address(vault), 100e18);
+        vault.pay(address(token), 100e18, bytes32(0));
         vm.stopPrank();
 
-        assertEq(token.balanceOf(address(vault)), 200e18);
+        // Non-owner cannot multicall
+        bytes[] memory calls = new bytes[](1);
+        calls[0] = abi.encodeCall(vault.withdrawProtocol, (address(token), alice, 100e18));
+        vm.prank(alice);
+        vm.expectRevert();
+        vault.multicall(calls);
+
+        // Owner can batch withdrawals
+        calls = new bytes[](2);
+        calls[0] = abi.encodeCall(vault.withdrawProtocol, (address(0), owner, 2 ether));
+        calls[1] = abi.encodeCall(vault.withdrawProtocol, (address(token), owner, 100e18));
+
+        vm.prank(owner);
+        vault.multicall(calls);
+
+        assertEq(address(vault).balance, 0);
+        assertEq(token.balanceOf(owner), 100e18);
     }
 }
 
